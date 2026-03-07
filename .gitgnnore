@@ -1,0 +1,32 @@
+# Виртуальное окружение
+venv/
+env/
+.env
+.venv
+
+# Python кэш
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Файлы с секретами и ключами
+*.pem
+*.key
+*.crt
+secrets/
+passphrase.txt
+
+# Директория с PKI данными
+pki/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Логи
+*.log
+logs/
