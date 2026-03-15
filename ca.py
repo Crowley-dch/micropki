@@ -40,7 +40,8 @@ class CertificateAuthority:
             key_type: str,
             key_size: int,
             passphrase: bytes,
-            validity_days: int
+            validity_days: int,
+            force: bool = False
     ):
 
         self.logger.info(f"ИНИЦИАЛИЗАЦИЯ КОРНЕВОГО CA ")
@@ -48,6 +49,11 @@ class CertificateAuthority:
         self.logger.info(f"Тип ключа: {key_type}")
         self.logger.info(f"Размер ключа: {key_size}")
         self.logger.info(f"Срок действия: {validity_days} дней")
+
+        if not self.check_existing_files(force):
+            error_msg = "Файлы уже существуют. Используйте --force для принудительной перезаписи"
+            self.logger.error(error_msg)
+            raise FileExistsError(error_msg)
 
         self.logger.info("ШАГ 1: Генерация ключевой пары")
         try:
@@ -122,6 +128,37 @@ class CertificateAuthority:
             'policy_path': str(policy_path)
         }
 
+    def check_existing_files(self, force: bool = False):
+        """
+        Проверяет, существуют ли уже файлы CA
+
+        Args:
+            force: если True, то разрешить перезапись
+
+        Returns:
+            bool: True если можно продолжать, False если нужно остановиться
+        """
+        key_path = self.private_dir / 'ca.key.pem'
+        cert_path = self.certs_dir / 'ca.cert.pem'
+        policy_path = self.out_dir / 'policy.txt'
+
+        existing_files = []
+        if key_path.exists():
+            existing_files.append(str(key_path))
+        if cert_path.exists():
+            existing_files.append(str(cert_path))
+        if policy_path.exists():
+            existing_files.append(str(policy_path))
+
+        if existing_files:
+            if force:
+                self.logger.warning(f"Принудительная перезапись файлов: {', '.join(existing_files)}")
+                return True
+            else:
+                self.logger.error(f"Файлы уже существуют: {', '.join(existing_files)}")
+                return False
+
+        return True
     def _create_policy_file(
             self,
             policy_path: Path,

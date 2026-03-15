@@ -5,7 +5,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 import datetime
-
+from pathlib import Path
 
 def generate_rsa_key(key_size: int = 4096):
     if key_size != 4096:
@@ -116,6 +116,24 @@ def parse_dn_string(dn_string: str):
 
     return attributes
 
+
+def load_encrypted_private_key(key_path: Path, passphrase: bytes):
+
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+    from cryptography.hazmat.backends import default_backend
+
+    print(f"Загрузка зашифрованного ключа из: {key_path}")
+
+    encrypted_key = key_path.read_bytes()
+
+    private_key = load_pem_private_key(
+        encrypted_key,
+        password=passphrase,
+        backend=default_backend()
+    )
+
+    print("Ключ успешно расшифрован")
+    return private_key
 
 def generate_serial_number():
 
