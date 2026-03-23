@@ -89,7 +89,43 @@ python -m micropki.cli ca-init --help
 python -m micropki.cli ca-verify --help
 python -m micropki.cli key-test --help
 ```
+8. С оздание промежуточного СА
+```bash
+python -m micropki.cli issue-intermediate --root-cert ./pki/certs/ca.cert.pem --root-key ./pki/private/ca.key.pem --root-pass-file passphrase.txt --subject "CN=Intermediate CA,O=MicroPKI" --key-type rsa --key-size 4096 --passphrase-file passphrase.txt --out-dir ./pki --validity-days 1825 --pathlen 0
+```
+Создает Intermediate CA, подписанный корневым CA, с ограничением пути pathlen.
+9. Выпуск сертификата сервера
+```bash
+python -m micropki.cli issue-cert --ca-cert ./pki/certs/intermediate.cert.pem --ca-key ./pki/private/intermediate.key.pem --ca-pass-file passphrase.txt --template server --subject "CN=example.com" --san dns:example.com --san dns:www.example.com --out-dir ./pki/certs --validity-days 365
+```
+Выпускает сертификат для TLS/HTTPS. Требует хотя бы один DNS или IP SAN.
 
+10. Выпуск клиентского сертификата
+```bash
+python -m micropki.cli issue-cert --ca-cert ./pki/certs/intermediate.cert.pem --ca-key ./pki/private/intermediate.key.pem --ca-pass-file passphrase.txt --template client --subject "CN=Alice Smith,EMAIL=alice@example.com" --san email:alice@example.com --out-dir ./pki/certs
+```
+Выпускает сертификат для аутентификации клиентов. Поддерживает email SAN.
+
+11. Выпуск сертификата подписи кода
+```bash
+python -m micropki.cli issue-cert --ca-cert ./pki/certs/intermediate.cert.pem --ca-key ./pki/private/intermediate.key.pem --ca-pass-file passphrase.txt --template code_signing --subject "CN=MicroPKI Code Signer" --out-dir ./pki/certs
+```
+Выпускает сертификат для подписи кода. Не требует SAN.
+
+12. Проверка цепочки сертификатов
+```bash
+python -m micropki.cli chain-verify --leaf ./pki/certs/example.com.cert.pem --intermediate ./pki/certs/intermediate.cert.pem --root ./pki/certs/ca.cert.pem
+```
+Проверяет цепочку leaf → intermediate → root: подписи, сроки действия, Basic Constraints, Key Usage.
+
+### SAN форматы
+ - dns:example.com - DNS имя
+
+ - ip:192.168.1.1 - IP адрес
+
+ - email:user@example.com - Email адрес
+
+ - uri:https://example.com - URI
 ## Описание файлов
 ```text
 cli.py
@@ -127,7 +163,36 @@ crypto_utils.py
 
 Генерация серийных номеров
 ```
-
+```text
+csr.py 
+Работа с Certificate Signing Requests:
+- generate_intermediate_csr() - генерация CSR для Intermediate CA
+- sign_csr_with_ca() - подпись CSR корневым/промежуточным CA
+- sign_end_entity_certificate() - подпись конечного сертификата с шаблоном
+- load_csr_from_file() - загрузка CSR из файла
+```
+```text
+templates.py
+Шаблоны сертификатов:
+- ServerTemplate - для TLS/HTTPS (EKU: serverAuth, требует DNS/IP SAN)
+- ClientTemplate - для аутентификации (EKU: clientAuth, поддерживает email SAN)
+- CodeSigningTemplate - для подписи кода (EKU: codeSigning, без SAN)
+- TemplateFactory - фабрика для получения шаблонов по имени
+```
+```text
+san_utils.py
+Утилиты для Subject Alternative Names:
+- parse_san_string() - парсинг строки "type:value"
+- parse_san_list() - парсинг списка SAN
+- create_san_extension() - создание расширения SAN
+- validate_san_for_template() - валидация SAN для шаблона
+```
+```text
+chain.py 
+Проверка цепочки сертификатов:
+- ChainValidator - класс для валидации цепочки (подписи, сроки, BC, KU)
+- validate_full_chain() - проверка leaf → intermediate → root
+```
 ## Тестирование
 
 Запуск всех тестов

@@ -20,6 +20,12 @@ class TestCertificates:
         import subprocess
         import tempfile
 
+        # Проверяем, доступен ли OpenSSL
+        try:
+            subprocess.run(['openssl', 'version'], capture_output=True, check=True)
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pytest.skip("OpenSSL не установлен, пропускаем тест")
+
         # Создаем тестовый сертификат
         key = generate_key('rsa', 4096)
         cert = create_self_signed_certificate(
@@ -58,7 +64,11 @@ class TestCertificates:
 
         finally:
             # Очистка
-            Path(cert_file).unlink(missing_ok=True)
+            import os
+            try:
+                os.unlink(cert_file)
+            except:
+                pass
     def test_create_rsa_certificate(self):
         cert = create_self_signed_certificate(
             private_key=self.rsa_key,

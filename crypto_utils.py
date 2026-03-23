@@ -7,9 +7,10 @@ from cryptography.x509.oid import NameOID
 import datetime
 from pathlib import Path
 
+
 def generate_rsa_key(key_size: int = 4096):
-    if key_size != 4096:
-        raise ValueError(f"Для RSA допустим только размер 4096, получено: {key_size}")
+    if key_size not in [2048, 4096]:
+        raise ValueError(f"Для RSA допустимые размеры: 2048, 4096, получено: {key_size}")
 
     print(f"Генерация RSA ключа {key_size} бит...")
     private_key = rsa.generate_private_key(

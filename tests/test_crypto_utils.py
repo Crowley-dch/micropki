@@ -25,8 +25,8 @@ class TestCryptoUtils:
         assert isinstance(key, rsa.RSAPrivateKey)
 
     def test_generate_rsa_key_wrong_size(self):
-        with pytest.raises(ValueError, match="Для RSA допустим только размер 4096"):
-            generate_rsa_key(2048)
+        with pytest.raises(ValueError, match="Для RSA допустимые размеры: 2048, 4096"):
+            generate_rsa_key(1024)
 
     def test_generate_ecc_key(self):
         key = generate_ecc_key(384)
