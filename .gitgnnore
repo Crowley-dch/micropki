@@ -10,7 +10,11 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
-
+# Базы данных SQLite
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
 # Файлы с секретами и ключами
 *.pem
 *.key

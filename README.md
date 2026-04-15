@@ -32,6 +32,14 @@ pip install -r requirements.txt
 ```bash
 echo "my-secret-password" > passphrase.txt
 ```
+### Инициализация базы данных
+```bash
+python -m micropki.cli db-init --db-path ./pki/micropki.db
+```
+### Запуск HTTP репозиторий сервера
+```bash
+python -m micropki.cli repo-serve --host 127.0.0.1 --port 8080 --db-path ./pki/micropki.db --cert-dir ./pki/certs
+```
 ### Создайте корневой CA (RSA)
 ```bash
 python -m micropki.cli ca-init --subject "/CN=My Root CA" --key-type rsa --key-size 4096 --passphrase-file passphrase.txt --out-dir ./pki
@@ -117,6 +125,27 @@ python -m micropki.cli issue-cert --ca-cert ./pki/certs/intermediate.cert.pem --
 python -m micropki.cli chain-verify --leaf ./pki/certs/example.com.cert.pem --intermediate ./pki/certs/intermediate.cert.pem --root ./pki/certs/ca.cert.pem
 ```
 Проверяет цепочку leaf → intermediate → root: подписи, сроки действия, Basic Constraints, Key Usage.
+13. Инициализация базы данных
+```bash
+python -m micropki.cli db-init --db-path ./pki/micropki.db
+```
+Создает SQLite базу данных и необходимые таблицы для хранения сертификатов.
+14. Список сертификатов
+```bash
+python -m micropki.cli list-certs
+python -m micropki.cli list-certs --status valid
+python -m micropki.cli list-certs --format json
+python -m micropki.cli list-certs --format csv
+```
+Выводит список всех сертификатов из базы данных. Поддерживает фильтрацию по статусу и форматы вывода (table, json, csv).
+15. Показать сертификат по серийному номеру
+```bash
+python -m micropki.cli show-cert 2A7F
+```
+16. Запуск HTTP репозиторий сервера
+```bash
+python -m micropki.cli repo-serve --host 127.0.0.1 --port 8080 --db-path ./pki/micropki.db --cert-dir ./pki/certs
+```
 
 ### SAN форматы
  - dns:example.com - DNS имя
