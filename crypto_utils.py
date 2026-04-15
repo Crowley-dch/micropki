@@ -6,7 +6,7 @@ from cryptography import x509
 from cryptography.x509.oid import NameOID
 import datetime
 from pathlib import Path
-
+from .serial import generate_serial_number as generate_unique_serial
 
 def generate_rsa_key(key_size: int = 4096):
     if key_size not in [2048, 4096]:
@@ -136,11 +136,10 @@ def load_encrypted_private_key(key_path: Path, passphrase: bytes):
     print("Ключ успешно расшифрован")
     return private_key
 
-def generate_serial_number():
 
-    random_bytes = os.urandom(19)
-    serial = int.from_bytes(random_bytes, byteorder='big')
-    return serial
+def generate_serial_number(db_conn=None, check_unique: bool = True) -> int:
+    from .serial import generate_serial_number as gen_serial
+    return gen_serial(db_conn, check_unique)
 
 
 if __name__ == '__main__':

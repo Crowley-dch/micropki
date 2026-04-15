@@ -87,10 +87,9 @@ class TestCryptoUtils:
         assert len(result) == 3
         assert result[0].value == 'Test CA'
 
-    def test_generate_serial_number(self):
-        serial = generate_serial_number()
-        assert serial > 0
-
-        # Проверяем лимит в 159 бит
-        max_serial = (1 << 159) - 1
-        assert serial <= max_serial
+    def test_generate_serial_number_unique(self):
+        serials = set()
+        for _ in range(100):
+            serial = generate_serial_number()
+            serials.add(serial)
+        assert len(serials) == 100

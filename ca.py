@@ -1,18 +1,22 @@
 import os
 from pathlib import Path
 import datetime
+from cryptography.hazmat.primitives import serialization
 
 from .crypto_utils import generate_key, encrypt_private_key
 from .certificates import create_self_signed_certificate, cert_to_pem
 from .logger import get_logger
 
+from .database import CertificateDatabase
+from .serial import SerialGenerator
 
 class CertificateAuthority:
 
-    def __init__(self, out_dir: str, log_file: str = None):
+    def __init__(self, out_dir: str, log_file: str = None, db_path: str = None):
 
         self.out_dir = Path(out_dir)
         self.logger = get_logger()
+        self.db = CertificateDatabase(db_path) if db_path else None
 
         self.private_dir = self.out_dir / 'private'
         self.certs_dir = self.out_dir / 'certs'
@@ -20,7 +24,6 @@ class CertificateAuthority:
         self.logger.info(f"Инициализация CA в директории: {out_dir}")
 
     def create_directories(self):
-
         self.logger.info("Создание структуры директорий")
 
         self.private_dir.mkdir(parents=True, exist_ok=True)
@@ -34,6 +37,56 @@ class CertificateAuthority:
 
         self.logger.info(f"Директории созданы: {self.out_dir}")
 
+    def _store_certificate_in_db(self, certificate, subject_dn: str, issuer_dn: str):
+
+        if not self.db:
+            self.logger.warning("База данных не настроена, пропускаем сохранение")
+            return
+
+        from datetime import datetime
+
+        serial_hex = hex(certificate.serial_number)[2:].upper()
+
+        cert_data = {
+            'serial_hex': serial_hex,
+            'subject': subject_dn,
+            'issuer': issuer_dn,
+            'not_before': certificate.not_valid_before.isoformat(),
+            'not_after': certificate.not_valid_after.isoformat(),
+            'cert_pem': certificate.public_bytes(serialization.Encoding.PEM).decode('utf-8'),
+            'status': 'valid',
+            'created_at': datetime.now().isoformat()
+        }
+
+        if self.db.insert_certificate(cert_data):
+            self.logger.info(f"Сертификат сохранён в БД. Серийный номер: {serial_hex}")
+        else:
+            self.logger.error(f"Не удалось сохранить сертификат в БД: {serial_hex}")
+
+    def check_existing_files(self, force: bool = False):
+
+        key_path = self.private_dir / 'ca.key.pem'
+        cert_path = self.certs_dir / 'ca.cert.pem'
+        policy_path = self.out_dir / 'policy.txt'
+
+        existing_files = []
+        if key_path.exists():
+            existing_files.append(str(key_path))
+        if cert_path.exists():
+            existing_files.append(str(cert_path))
+        if policy_path.exists():
+            existing_files.append(str(policy_path))
+
+        if existing_files:
+            if force:
+                self.logger.warning(f"Принудительная перезапись файлов: {', '.join(existing_files)}")
+                return True
+            else:
+                self.logger.error(f"Файлы уже существуют: {', '.join(existing_files)}")
+                return False
+
+        return True
+
     def init_root_ca(
             self,
             subject: str,
@@ -44,7 +97,7 @@ class CertificateAuthority:
             force: bool = False
     ):
 
-        self.logger.info(f"ИНИЦИАЛИЗАЦИЯ КОРНЕВОГО CA ")
+        self.logger.info(f"=== НАЧАЛО ИНИЦИАЛИЗАЦИИ КОРНЕВОГО CA ===")
         self.logger.info(f"Subject: {subject}")
         self.logger.info(f"Тип ключа: {key_type}")
         self.logger.info(f"Размер ключа: {key_size}")
@@ -76,7 +129,11 @@ class CertificateAuthority:
             self.logger.error(f"Ошибка создания сертификата: {e}")
             raise
 
-        self.logger.info("ШАГ 3: Шифрование и сохранение приватного ключа")
+        if self.db:
+            self.logger.info("ШАГ 3: Сохранение сертификата в базу данных")
+            self._store_certificate_in_db(certificate, subject, subject)
+
+        self.logger.info("ШАГ 4: Шифрование и сохранение приватного ключа")
         key_path = self.private_dir / 'ca.key.pem'
         try:
             encrypted_key = encrypt_private_key(private_key, passphrase)
@@ -93,7 +150,7 @@ class CertificateAuthority:
             self.logger.error(f"Ошибка сохранения ключа: {e}")
             raise
 
-        self.logger.info("ШАГ 4: Сохранение сертификата")
+        self.logger.info("ШАГ 5: Сохранение сертификата")
         cert_path = self.certs_dir / 'ca.cert.pem'
         try:
             pem_cert = cert_to_pem(certificate)
@@ -103,7 +160,7 @@ class CertificateAuthority:
             self.logger.error(f"Ошибка сохранения сертификата: {e}")
             raise
 
-        self.logger.info("ШАГ 5: Создание документа политики")
+        self.logger.info("ШАГ 6: Создание документа политики")
         policy_path = self.out_dir / 'policy.txt'
         try:
             self._create_policy_file(
@@ -128,37 +185,6 @@ class CertificateAuthority:
             'policy_path': str(policy_path)
         }
 
-    def check_existing_files(self, force: bool = False):
-        """
-        Проверяет, существуют ли уже файлы CA
-
-        Args:
-            force: если True, то разрешить перезапись
-
-        Returns:
-            bool: True если можно продолжать, False если нужно остановиться
-        """
-        key_path = self.private_dir / 'ca.key.pem'
-        cert_path = self.certs_dir / 'ca.cert.pem'
-        policy_path = self.out_dir / 'policy.txt'
-
-        existing_files = []
-        if key_path.exists():
-            existing_files.append(str(key_path))
-        if cert_path.exists():
-            existing_files.append(str(cert_path))
-        if policy_path.exists():
-            existing_files.append(str(policy_path))
-
-        if existing_files:
-            if force:
-                self.logger.warning(f"Принудительная перезапись файлов: {', '.join(existing_files)}")
-                return True
-            else:
-                self.logger.error(f"Файлы уже существуют: {', '.join(existing_files)}")
-                return False
-
-        return True
     def _create_policy_file(
             self,
             policy_path: Path,
@@ -171,15 +197,6 @@ class CertificateAuthority:
     ):
         """
         Создает файл политики CA
-
-        Args:
-            policy_path: путь для сохранения
-            subject: DN субъекта
-            serial_number: серийный номер сертификата
-            not_before: дата начала действия
-            not_after: дата окончания действия
-            key_type: тип ключа
-            key_size: размер ключа
         """
         content = f"""CERTIFICATE POLICY DOCUMENT
 ==========================
@@ -205,6 +222,7 @@ All private keys are stored encrypted with AES-256.
         policy_path.write_text(content, encoding='utf-8')
 
 
+# Для тестирования
 if __name__ == '__main__':
     from .logger import setup_logger
 

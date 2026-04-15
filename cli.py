@@ -15,6 +15,17 @@ def validate_key_type(value):
         raise argparse.ArgumentTypeError(f"Тип ключа должен быть 'rsa' или 'ecc', получено: {value}")
     return value
 
+def validate_db_path(value):
+    path = Path(value)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+def validate_serial(value):
+    try:
+        int(value, 16)
+        return value.upper()
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"Неверный формат серийного номера: {value}. Ожидается hex строка")
 
 def validate_pathlen(value):
     try:
@@ -426,11 +437,100 @@ def create_parser():
         '--log-file',
         help="Путь к файлу лога (если не указан, лог пишется в stderr)"
     )
+    # Команда 'db init'
+    db_init_parser = subparsers.add_parser(
+        'db-init',
+        aliases=['db init'],
+        help="Инициализировать базу данных сертификатов"
+    )
+    db_init_parser.add_argument(
+        '--db-path',
+        type=validate_db_path,
+        default='./pki/micropki.db',
+        help="Путь к SQLite базе данных (по умолчанию: ./pki/micropki.db)"
+    )
+    db_init_parser.add_argument('--log-file')
+
+    # Команда 'ca list-certs'
+    list_certs_parser = subparsers.add_parser(
+        'list-certs',
+        aliases=['ca list-certs'],
+        help="Список сертификатов в базе данных"
+    )
+    list_certs_parser.add_argument(
+        '--status',
+        choices=['valid', 'revoked', 'expired'],
+        help="Фильтр по статусу"
+    )
+    list_certs_parser.add_argument(
+        '--format',
+        choices=['table', 'json', 'csv'],
+        default='table',
+        help="Формат вывода (по умолчанию: table)"
+    )
+    list_certs_parser.add_argument(
+        '--db-path',
+        type=validate_db_path,
+        default='./pki/micropki.db',
+        help="Путь к SQLite базе данных"
+    )
+    list_certs_parser.add_argument('--log-file')
+
+    # Команда 'ca show-cert'
+    show_cert_parser = subparsers.add_parser(
+        'show-cert',
+        aliases=['ca show-cert'],
+        help="Показать сертификат по серийному номеру"
+    )
+    show_cert_parser.add_argument(
+        'serial',
+        type=validate_serial,
+        help="Серийный номер сертификата (hex)"
+    )
+    show_cert_parser.add_argument(
+        '--db-path',
+        type=validate_db_path,
+        default='./pki/micropki.db',
+        help="Путь к SQLite базе данных"
+    )
+    show_cert_parser.add_argument('--log-file')
+
+    # Команда 'repo serve'
+    repo_serve_parser = subparsers.add_parser(
+        'repo-serve',
+        aliases=['repo serve'],
+        help="Запустить HTTP репозиторий сервер"
+    )
+    repo_serve_parser.add_argument(
+        '--host',
+        default='127.0.0.1',
+        help="Адрес для привязки (по умолчанию: 127.0.0.1)"
+    )
+    repo_serve_parser.add_argument(
+        '--port',
+        type=int,
+        default=8080,
+        help="Порт для привязки (по умолчанию: 8080)"
+    )
+    repo_serve_parser.add_argument(
+        '--db-path',
+        type=validate_db_path,
+        default='./pki/micropki.db',
+        help="Путь к SQLite базе данных"
+    )
+    repo_serve_parser.add_argument(
+        '--cert-dir',
+        type=validate_out_dir,
+        default='./pki/certs',
+        help="Директория с сертификатами (по умолчанию: ./pki/certs)"
+    )
+    repo_serve_parser.add_argument('--log-file')
 
     return parser
 
 
 def main():
+    import sys
     parser = create_parser()
     args = parser.parse_args()
 
@@ -442,7 +542,7 @@ def main():
                 validate_key_size_with_type(args.key_size, args.key_type)
             except ValueError as e:
                 logger.error(str(e))
-                print(f" Ошибка: {e}", file=sys.stderr)
+                print(f"❌ Ошибка: {e}", file=sys.stderr)
                 return 1
 
             try:
@@ -450,13 +550,14 @@ def main():
                 logger.info(f"Пароль прочитан из файла: {args.passphrase_file}")
             except Exception as e:
                 logger.error(f"Ошибка чтения файла с паролем: {e}")
-                print(f" Ошибка: Не удалось прочитать файл с паролем - {e}", file=sys.stderr)
+                print(f"❌ Ошибка: Не удалось прочитать файл с паролем - {e}", file=sys.stderr)
                 return 1
 
             try:
                 ca = CertificateAuthority(
                     out_dir=str(args.out_dir),
-                    log_file=args.log_file
+                    log_file=args.log_file,
+                    db_path=getattr(args, 'db_path', None)
                 )
 
                 ca.create_directories()
@@ -470,22 +571,22 @@ def main():
                     force=args.force
                 )
 
-                print("\n Корневой CA успешно создан!")
-                print(f" Директория: {args.out_dir}")
-                print(f" Приватный ключ: {files['key_path']}")
-                print(f" Сертификат: {files['cert_path']}")
-                print(f" Политика: {files['policy_path']}")
+                print("\n✅ Корневой CA успешно создан!")
+                print(f"📁 Директория: {args.out_dir}")
+                print(f"🔑 Приватный ключ: {files['key_path']}")
+                print(f"📜 Сертификат: {files['cert_path']}")
+                print(f"📄 Политика: {files['policy_path']}")
 
                 return 0
 
             except FileExistsError as e:
                 logger.error(str(e))
-                print(f"\n Ошибка: {e}", file=sys.stderr)
+                print(f"\n❌ Ошибка: {e}", file=sys.stderr)
                 return 1
 
             except Exception as e:
                 logger.error(f"Ошибка при создании CA: {e}")
-                print(f"\n Ошибка: {e}", file=sys.stderr)
+                print(f"\n❌ Ошибка: {e}", file=sys.stderr)
                 return 1
 
         elif args.command in ['ca-verify', 'ca verify']:
@@ -493,7 +594,6 @@ def main():
             logger.info(f"Проверка сертификата: {cert_path}")
 
             try:
-                # Проверяем через OpenSSL
                 result = subprocess.run(
                     ['openssl', 'x509', '-in', str(cert_path), '-text', '-noout'],
                     capture_output=True,
@@ -502,10 +602,10 @@ def main():
 
                 if result.returncode != 0:
                     logger.error(f"Ошибка при чтении сертификата: {result.stderr}")
-                    print(f" Ошибка при чтении сертификата", file=sys.stderr)
+                    print(f"❌ Ошибка при чтении сертификата", file=sys.stderr)
                     return 1
 
-                print("\n Содержимое сертификата:")
+                print("\n📜 Содержимое сертификата:")
                 print(result.stdout)
 
                 verify_result = subprocess.run(
@@ -515,57 +615,49 @@ def main():
                 )
 
                 if verify_result.returncode == 0 and "OK" in verify_result.stdout:
-                    print(" Сертификат самоподписанный и валидный")
+                    print("✅ Сертификат самоподписанный и валидный")
                     logger.info("Сертификат успешно проверен")
                     return 0
                 else:
-                    print(" Сертификат не прошел проверку")
+                    print("❌ Сертификат не прошел проверку")
                     logger.error(f"Ошибка проверки: {verify_result.stderr}")
                     return 1
 
             except FileNotFoundError:
                 logger.error("OpenSSL не найден. Убедитесь, что OpenSSL установлен")
-                print(" OpenSSL не найден. Убедитесь, что OpenSSL установлен", file=sys.stderr)
+                print("❌ OpenSSL не найден. Убедитесь, что OpenSSL установлен", file=sys.stderr)
                 return 1
 
             except Exception as e:
                 logger.error(f"Ошибка при проверке сертификата: {e}")
-                print(f" Ошибка: {e}", file=sys.stderr)
+                print(f"❌ Ошибка: {e}", file=sys.stderr)
                 return 1
 
-        # Команда: key-test
         elif args.command in ['key-test', 'key test']:
             logger.info("Проверка соответствия ключа и сертификата")
 
             try:
-                # Читаем пароль
                 passphrase = read_passphrase(args.passphrase_file)
 
-                # Загружаем ключ
                 from cryptography.hazmat.primitives import hashes
                 from cryptography.hazmat.primitives.asymmetric import padding
                 from cryptography import x509
-                from .crypto_utils import load_encrypted_private_key, encrypt_private_key
+                from .crypto_utils import load_encrypted_private_key
 
-                # Загружаем сертификат
                 with open(args.cert, 'rb') as f:
                     cert_data = f.read()
                 cert = x509.load_pem_x509_certificate(cert_data)
 
-                # Загружаем и расшифровываем ключ
                 private_key = load_encrypted_private_key(args.key, passphrase)
 
-                # Тестовое сообщение
                 test_message = b"MicroPKI test message for key verification"
 
-                # Подписываем приватным ключом
                 signature = private_key.sign(
                     test_message,
                     padding.PKCS1v15(),
                     hashes.SHA256()
                 )
 
-                # Проверяем публичным ключом из сертификата
                 cert.public_key().verify(
                     signature,
                     test_message,
@@ -573,26 +665,27 @@ def main():
                     hashes.SHA256()
                 )
 
-                print("\n Ключ соответствует сертификату!")
-                print(f" Ключ: {args.key}")
-                print(f" Сертификат: {args.cert}")
+                print("\n✅ Ключ соответствует сертификату!")
+                print(f"🔑 Ключ: {args.key}")
+                print(f"📜 Сертификат: {args.cert}")
                 logger.info("Ключ успешно проверен на соответствие сертификату")
                 return 0
 
             except Exception as e:
                 logger.error(f"Ошибка при проверке ключа: {e}")
-                print(f"\n Ключ НЕ соответствует сертификату: {e}", file=sys.stderr)
+                print(f"\n❌ Ключ НЕ соответствует сертификату: {e}", file=sys.stderr)
                 return 1
+
         elif args.command in ['issue-intermediate', 'issue intermediate', 'ca issue-intermediate',
                               'ca issue intermediate']:
             from .crypto_utils import load_encrypted_private_key, encrypt_private_key, parse_dn_string
             from .certificates import cert_to_pem
-            from .csr import generate_intermediate_csr, sign_csr_with_ca, load_csr_from_file
+            from .csr import generate_intermediate_csr, sign_csr_with_ca
             from cryptography import x509
             import datetime
             from cryptography.hazmat.backends import default_backend
 
-            logger.info(" СОЗДАНИЕ ПРОМЕЖУТОЧНОГО CA ")
+            logger.info("=== СОЗДАНИЕ ПРОМЕЖУТОЧНОГО CA ===")
 
             try:
                 logger.info("Загрузка корневого CA")
@@ -650,7 +743,6 @@ def main():
                     pass
                 logger.info(f"Ключ Intermediate CA сохранен: {intermediate_key_path}")
 
-                # 8. Сохраняем сертификат Intermediate CA
                 certs_dir = Path(args.out_dir) / 'certs'
                 certs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -676,21 +768,21 @@ def main():
                         f.write(f"Created: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                     logger.info(f"policy.txt обновлен: {policy_path}")
 
-                print("\n Промежуточный CA успешно создан!")
-                print(f" Директория: {args.out_dir}")
-                print(f" Приватный ключ: {intermediate_key_path}")
-                print(f" Сертификат: {cert_path}")
-                print(f" CSR: {csr_path}")
+                print("\n✅ Промежуточный CA успешно создан!")
+                print(f"📁 Директория: {args.out_dir}")
+                print(f"🔑 Приватный ключ: {intermediate_key_path}")
+                print(f"📜 Сертификат: {cert_path}")
+                print(f"📄 CSR: {csr_path}")
 
                 return 0
 
             except FileExistsError as e:
                 logger.error(str(e))
-                print(f"\n Ошибка: {e}", file=sys.stderr)
+                print(f"\n❌ Ошибка: {e}", file=sys.stderr)
                 return 1
             except Exception as e:
                 logger.error(f"Ошибка при создании Intermediate CA: {e}")
-                print(f"\n Ошибка: {e}", file=sys.stderr)
+                print(f"\n❌ Ошибка: {e}", file=sys.stderr)
                 return 1
 
         elif args.command in ['chain-verify', 'chain verify']:
@@ -699,16 +791,17 @@ def main():
             return 0 if is_valid else 1
 
         elif args.command in ['issue-cert', 'issue cert', 'ca issue-cert', 'ca issue cert']:
-            from .crypto_utils import load_encrypted_private_key, generate_key, encrypt_private_key, parse_dn_string
+            from .crypto_utils import load_encrypted_private_key, generate_key, parse_dn_string
             from .certificates import cert_to_pem
             from .csr import sign_end_entity_certificate, load_csr_from_file
             from .templates import TemplateFactory
             from cryptography import x509
+            from cryptography.x509 import CertificateSigningRequestBuilder
             from cryptography.hazmat.backends import default_backend
             from cryptography.hazmat.primitives import hashes
             import datetime
 
-            logger.info(" ВЫПУСК КОНЕЧНОГО СЕРТИФИКАТА ")
+            logger.info("=== ВЫПУСК КОНЕЧНОГО СЕРТИФИКАТА ===")
 
             try:
                 logger.info("Загрузка CA")
@@ -728,22 +821,14 @@ def main():
                 if args.csr:
                     logger.info(f"Загрузка внешнего CSR: {args.csr}")
                     csr = load_csr_from_file(args.csr)
-                    # Извлекаем subject из CSR
                     subject = csr.subject
                     private_key = None
                     key_path = None
                 else:
                     logger.info("Генерация новой ключевой пары")
-                    if args.template == 'server':
-                        key_size = 2048
-                    else:
-                        key_size = 2048  # Стандарт
-                    private_key = generate_key('rsa', key_size)  # Для простоты используем RSA
+                    private_key = generate_key('rsa', 2048)
                     subject = x509.Name(parse_dn_string(args.subject))
-
-                    from cryptography.x509 import CertificateSigningRequestBuilder
-                    csr_builder = CertificateSigningRequestBuilder()
-                    csr_builder = csr_builder.subject_name(subject)
+                    csr_builder = CertificateSigningRequestBuilder().subject_name(subject)
                     csr = csr_builder.sign(private_key, hashes.SHA256(), default_backend())
 
                 san_list = args.san_list if hasattr(args, 'san_list') and args.san_list else []
@@ -780,13 +865,11 @@ def main():
                 cert_path.write_bytes(cert_pem)
                 logger.info(f"Сертификат сохранен: {cert_path}")
 
-                # 10. Сохраняем приватный ключ (если сгенерирован)
                 if private_key and not args.csr:
                     key_path = certs_dir / f"{common_name}.key.pem"
                     if key_path.exists() and not args.force:
                         raise FileExistsError(f"Файл уже существует: {key_path}. Используйте --force")
 
-                    # Сохраняем незашифрованный ключ
                     unencrypted_key = private_key.private_bytes(
                         encoding=serialization.Encoding.PEM,
                         format=serialization.PrivateFormat.PKCS8,
@@ -794,16 +877,14 @@ def main():
                     )
                     key_path.write_bytes(unencrypted_key)
 
-                    # Устанавливаем права 600
                     try:
                         os.chmod(key_path, 0o600)
                     except Exception:
                         pass
 
-                    logger.warning(f" Приватный ключ сохранен НЕЗАШИФРОВАННЫМ: {key_path}")
+                    logger.warning(f"Приватный ключ сохранен НЕЗАШИФРОВАННЫМ: {key_path}")
                     print(f"\n ВНИМАНИЕ: Приватный ключ сохранен НЕЗАШИФРОВАННЫМ: {key_path}")
 
-                # 11. Выводим информацию
                 print("\n Сертификат успешно выпущен!")
                 print(f" Директория: {args.out_dir}")
                 print(f" Шаблон: {args.template}")
@@ -827,17 +908,91 @@ def main():
                 return 1
             except Exception as e:
                 logger.error(f"Ошибка при выпуске сертификата: {e}")
-                print(f"\n Ошибка: {e}", file=sys.stderr)
+                print(f"\nОшибка: {e}", file=sys.stderr)
                 return 1
+
+
+        elif args.command in ['db-init', 'db init']:
+            from .database import CertificateDatabase
+            logger.info(f"Инициализация базы данных: {args.db_path}")
+            db = CertificateDatabase(args.db_path)
+            if db.init_schema():
+                print(f" База данных инициализирована: {args.db_path}")
+                logger.info(f"База данных успешно создана: {args.db_path}")
+            else:
+                print(f" Ошибка инициализации базы данных")
+                return 1
+            return 0
+
+        # Команда: list-certs
+        elif args.command in ['list-certs', 'ca list-certs']:
+            from .database import CertificateDatabase
+            import json
+            import csv
+            import sys
+
+            logger.info(f"Запрос списка сертификатов (статус: {args.status})")
+            db = CertificateDatabase(args.db_path)
+            certs = db.list_certificates(status=args.status)
+
+            if args.format == 'json':
+                output = [{'serial': c['serial_hex'], 'subject': c['subject'], 'issuer': c['issuer'], 'not_before': c['not_before'], 'not_after': c['not_after'], 'status': c['status']} for c in certs]
+                print(json.dumps(output, indent=2))
+            elif args.format == 'csv':
+                writer = csv.writer(sys.stdout)
+                writer.writerow(['serial', 'subject', 'issuer', 'not_before', 'not_after', 'status'])
+                for cert in certs:
+                    writer.writerow([cert['serial_hex'], cert['subject'], cert['issuer'], cert['not_before'][:10], cert['not_after'][:10], cert['status']])
+            else:
+                print("\n" + "=" * 100)
+                print(f"{'Serial':<20} {'Subject':<35} {'Status':<10} {'Expires':<20}")
+                print("=" * 100)
+                for cert in certs:
+                    serial = cert['serial_hex'][:18] + "..." if len(cert['serial_hex']) > 20 else cert['serial_hex']
+                    subject = cert['subject'][:32] + "..." if len(cert['subject']) > 35 else cert['subject']
+                    expires = cert['not_after'][:10] if cert['not_after'] else 'N/A'
+                    print(f"{serial:<20} {subject:<35} {cert['status']:<10} {expires:<20}")
+                print("=" * 100)
+                print(f"Всего: {len(certs)} сертификатов")
+            return 0
+
+        # Команда: show-cert
+        elif args.command in ['show-cert', 'ca show-cert']:
+            from .database import CertificateDatabase
+            logger.info(f"Поиск сертификата по серийному номеру: {args.serial}")
+            db = CertificateDatabase(args.db_path)
+            cert = db.get_certificate_by_serial(args.serial)
+            if cert:
+                print(cert['cert_pem'])
+                logger.info(f"Сертификат найден: {cert['subject']}")
+            else:
+                print(f" Сертификат с серийным номером {args.serial} не найден", file=sys.stderr)
+                return 1
+            return 0
+
+        # Команда: repo serve
+        elif args.command in ['repo-serve', 'repo serve']:
+            from .repository import start_server
+            logger.info(f"Запуск HTTP репозиторий сервера: {args.host}:{args.port}")
+            print(f" Запуск HTTP сервера на http://{args.host}:{args.port}")
+            print("   Нажмите Ctrl+C для остановки")
+            start_server(
+                host=args.host,
+                port=args.port,
+                db_path=args.db_path,
+                cert_dir=args.cert_dir,
+                log_file=args.log_file
+            )
+            return 0
+
         else:
             logger.error(f"Неизвестная команда: {args.command}")
-            print(f" Ошибка: Неизвестная команда '{args.command}'. Используйте 'ca init', 'ca verify' или 'key test'",
-                  file=sys.stderr)
+            print(f" Ошибка: Неизвестная команда '{args.command}'. Доступные команды: ca-init, ca-verify, key-test, issue-intermediate, issue-cert, chain-verify, db-init, list-certs, show-cert, repo-serve", file=sys.stderr)
             return 1
 
     except KeyboardInterrupt:
         logger.info("Операция прервана пользователем")
-        print("\nОперация прервана", file=sys.stderr)
+        print("\n Операция прервана", file=sys.stderr)
         return 1
 
     except Exception as e:
