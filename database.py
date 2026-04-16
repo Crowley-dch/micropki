@@ -31,34 +31,55 @@ class CertificateDatabase:
             self._local.conn = None
 
     def init_schema(self) -> bool:
+        """
+        Создаёт схему базы данных (таблицы, индексы)
+
+        Returns:
+            True если успешно, False если ошибка
+        """
         conn = self._get_connection()
         cursor = conn.cursor()
 
+        # Таблица certificates
         cursor.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='certificates'"
         )
-        if cursor.fetchone():
-            return True
+        if not cursor.fetchone():
+            cursor.execute("""
+                CREATE TABLE certificates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    serial_hex TEXT UNIQUE NOT NULL,
+                    subject TEXT NOT NULL,
+                    issuer TEXT NOT NULL,
+                    not_before TEXT NOT NULL,
+                    not_after TEXT NOT NULL,
+                    cert_pem TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    revocation_reason TEXT,
+                    revocation_date TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            cursor.execute("CREATE INDEX idx_serial_hex ON certificates(serial_hex)")
+            cursor.execute("CREATE INDEX idx_status ON certificates(status)")
+            cursor.execute("CREATE INDEX idx_issuer ON certificates(issuer)")
 
-        cursor.execute("""
-            CREATE TABLE certificates (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                serial_hex TEXT UNIQUE NOT NULL,
-                subject TEXT NOT NULL,
-                issuer TEXT NOT NULL,
-                not_before TEXT NOT NULL,
-                not_after TEXT NOT NULL,
-                cert_pem TEXT NOT NULL,
-                status TEXT NOT NULL,
-                revocation_reason TEXT,
-                revocation_date TEXT,
-                created_at TEXT NOT NULL
-            )
-        """)
-
-        cursor.execute("CREATE INDEX idx_serial_hex ON certificates(serial_hex)")
-        cursor.execute("CREATE INDEX idx_status ON certificates(status)")
-        cursor.execute("CREATE INDEX idx_not_after ON certificates(not_after)")
+        # Таблица crl_metadata (НОВАЯ)
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='crl_metadata'"
+        )
+        if not cursor.fetchone():
+            cursor.execute("""
+                CREATE TABLE crl_metadata (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ca_subject TEXT NOT NULL UNIQUE,
+                    crl_number INTEGER NOT NULL,
+                    last_generated TEXT NOT NULL,
+                    next_update TEXT NOT NULL,
+                    crl_path TEXT NOT NULL
+                )
+            """)
+            cursor.execute("CREATE INDEX idx_ca_subject ON crl_metadata(ca_subject)")
 
         conn.commit()
         return True

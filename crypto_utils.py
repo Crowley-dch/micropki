@@ -141,7 +141,9 @@ def generate_serial_number(db_conn=None, check_unique: bool = True) -> int:
     from .serial import generate_serial_number as gen_serial
     return gen_serial(db_conn, check_unique)
 
-
+def read_passphrase_from_file(passphrase_file: Path) -> bytes:
+    with open(passphrase_file, 'rb') as f:
+        return f.read().strip()
 if __name__ == '__main__':
     print("Тестирование crypto_utils.py")
 

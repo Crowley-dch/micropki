@@ -146,6 +146,38 @@ python -m micropki.cli show-cert 2A7F
 ```bash
 python -m micropki.cli repo-serve --host 127.0.0.1 --port 8080 --db-path ./pki/micropki.db --cert-dir ./pki/certs
 ```
+17. Отзыв сертификата
+```bash
+python -m micropki.cli revoke 2A7F --reason keyCompromise
+python -m micropki.cli revoke 3B8E --reason superseded --force
+```
+Отзывает сертификат по серийному номеру. Поддерживает причины отзыва согласно RFC 5280.
+18. Генерация CRL
+```bash
+python -m micropki.cli gen-crl --ca root --next-update 7
+python -m micropki.cli gen-crl --ca intermediate --next-update 14
+```
+Генерирует CRL (Certificate Revocation List) для указанного CA.
+
+### Примеры API запросов
+```bash
+# Проверка здоровья
+curl http://localhost:8080/health
+
+# Получение корневого сертификата
+curl http://localhost:8080/ca/root --output root.pem
+
+# Получение сертификата по серийному номеру
+curl http://localhost:8080/certificate/2A7F --output cert.pem
+
+# Получение CRL
+curl http://localhost:8080/crl/root.crl
+curl http://localhost:8080/crl/intermediate.crl
+
+# Проверка CRL через OpenSSL
+openssl crl -in root.crl.pem -text -noout
+openssl crl -in root.crl.pem -CAfile ca.cert.pem -noout
+```
 
 ### SAN форматы
  - dns:example.com - DNS имя
@@ -221,6 +253,42 @@ chain.py
 Проверка цепочки сертификатов:
 - ChainValidator - класс для валидации цепочки (подписи, сроки, BC, KU)
 - validate_full_chain() - проверка leaf → intermediate → root
+```
+```text
+database.py
+Работа с SQLite базой данных:
+- CertificateDatabase - класс для работы с БД
+- init_schema() - создание таблиц certificates и crl_metadata
+- insert_certificate(), get_certificate_by_serial(), list_certificates()
+- update_status(), get_crl_number(), update_crl_metadata()
+```
+```text
+repository.py 
+HTTP репозиторий сервер:
+- RepositoryHandler - обработчик HTTP запросов
+- Эндпоинты: /certificate/, /ca/, /crl/, /health, /
+- Поддержка CRL distribution
+```
+```text
+serial.py
+Генератор уникальных серийных номеров:
+- SerialGenerator - класс для генерации
+- Формат: 64 бита (timestamp 32 бита + random 32 бита)
+```
+```text
+revocation.py 
+Управление отзывом сертификатов:
+- get_reason_code() - преобразование причины в код RFC 5280
+- revoke_certificate() - отзыв сертификата в БД
+- Поддержка всех 10 причин отзыва
+```
+```text
+crl.py 
+Генерация CRL:
+- CRLGenerator - класс для создания CRL
+- generate_crl() - генерация CRLv2
+- Поддержка AKI и CRL Number расширений
+- Сохранение CRL в PEM формате
 ```
 ## Тестирование
 

@@ -120,7 +120,17 @@ def validate_cert_file(value):
         raise argparse.ArgumentTypeError(f"Указанный путь не является файлом: {value}")
     return path
 
-
+def validate_reason(value):
+    valid_reasons = [
+        'unspecified', 'keyCompromise', 'cACompromise', 'affiliationChanged',
+        'superseded', 'cessationOfOperation', 'certificateHold',
+        'removeFromCRL', 'privilegeWithdrawn', 'aACompromise'
+    ]
+    if value not in valid_reasons:
+        raise argparse.ArgumentTypeError(
+            f"Причина отзыва должна быть одной из: {', '.join(valid_reasons)}, получено: {value}"
+        )
+    return value
 def read_passphrase(passphrase_file: Path) -> bytes:
     with open(passphrase_file, 'rb') as f:
         passphrase = f.read().strip()
@@ -524,6 +534,38 @@ def create_parser():
         default='./pki/certs',
         help="Директория с сертификатами (по умолчанию: ./pki/certs)"
     )
+    # Команда 'revoke'
+    revoke_parser = subparsers.add_parser(
+        'revoke',
+        aliases=['ca revoke'],
+        help="Отозвать сертификат",
+        description="Отзывает выпущенный сертификат по серийному номеру"
+    )
+    revoke_parser.add_argument('serial', type=validate_serial, help="Серийный номер сертификата (hex)")
+    revoke_parser.add_argument('--reason', type=validate_reason, default='unspecified',
+                               help="Причина отзыва (по умолчанию: unspecified)")
+    revoke_parser.add_argument('--db-path', type=validate_db_path, default='./pki/micropki.db',
+                               help="Путь к SQLite базе данных")
+    revoke_parser.add_argument('--force', action='store_true',
+                               help="Принудительно без подтверждения")
+    revoke_parser.add_argument('--log-file')
+
+    # Команда 'gen-crl'
+    gen_crl_parser = subparsers.add_parser(
+        'gen-crl',
+        aliases=['ca gen-crl'],
+        help="Сгенерировать CRL",
+        description="Генерирует CRL (Certificate Revocation List) для указанного CA"
+    )
+    gen_crl_parser.add_argument('--ca', required=True, choices=['root', 'intermediate'],
+                                help="Тип CA: root или intermediate")
+    gen_crl_parser.add_argument('--next-update', type=int, default=7,
+                                help="Дней до следующего обновления CRL (по умолчанию: 7)")
+    gen_crl_parser.add_argument('--out-file', type=str,
+                                help="Путь для сохранения CRL (опционально)")
+    gen_crl_parser.add_argument('--db-path', type=validate_db_path, default='./pki/micropki.db')
+    gen_crl_parser.add_argument('--out-dir', type=validate_out_dir, default='./pki')
+    gen_crl_parser.add_argument('--log-file')
     repo_serve_parser.add_argument('--log-file')
 
     return parser
@@ -542,7 +584,7 @@ def main():
                 validate_key_size_with_type(args.key_size, args.key_type)
             except ValueError as e:
                 logger.error(str(e))
-                print(f"❌ Ошибка: {e}", file=sys.stderr)
+                print(f" Ошибка: {e}", file=sys.stderr)
                 return 1
 
             try:
@@ -550,7 +592,7 @@ def main():
                 logger.info(f"Пароль прочитан из файла: {args.passphrase_file}")
             except Exception as e:
                 logger.error(f"Ошибка чтения файла с паролем: {e}")
-                print(f"❌ Ошибка: Не удалось прочитать файл с паролем - {e}", file=sys.stderr)
+                print(f" Ошибка: Не удалось прочитать файл с паролем - {e}", file=sys.stderr)
                 return 1
 
             try:
@@ -571,22 +613,22 @@ def main():
                     force=args.force
                 )
 
-                print("\n✅ Корневой CA успешно создан!")
-                print(f"📁 Директория: {args.out_dir}")
-                print(f"🔑 Приватный ключ: {files['key_path']}")
-                print(f"📜 Сертификат: {files['cert_path']}")
-                print(f"📄 Политика: {files['policy_path']}")
+                print("\n Корневой CA успешно создан!")
+                print(f" Директория: {args.out_dir}")
+                print(f" Приватный ключ: {files['key_path']}")
+                print(f" Сертификат: {files['cert_path']}")
+                print(f" Политика: {files['policy_path']}")
 
                 return 0
 
             except FileExistsError as e:
                 logger.error(str(e))
-                print(f"\n❌ Ошибка: {e}", file=sys.stderr)
+                print(f"\n Ошибка: {e}", file=sys.stderr)
                 return 1
 
             except Exception as e:
                 logger.error(f"Ошибка при создании CA: {e}")
-                print(f"\n❌ Ошибка: {e}", file=sys.stderr)
+                print(f"\n Ошибка: {e}", file=sys.stderr)
                 return 1
 
         elif args.command in ['ca-verify', 'ca verify']:
@@ -602,10 +644,10 @@ def main():
 
                 if result.returncode != 0:
                     logger.error(f"Ошибка при чтении сертификата: {result.stderr}")
-                    print(f"❌ Ошибка при чтении сертификата", file=sys.stderr)
+                    print(f" Ошибка при чтении сертификата", file=sys.stderr)
                     return 1
 
-                print("\n📜 Содержимое сертификата:")
+                print("\n Содержимое сертификата:")
                 print(result.stdout)
 
                 verify_result = subprocess.run(
@@ -615,22 +657,22 @@ def main():
                 )
 
                 if verify_result.returncode == 0 and "OK" in verify_result.stdout:
-                    print("✅ Сертификат самоподписанный и валидный")
+                    print(" Сертификат самоподписанный и валидный")
                     logger.info("Сертификат успешно проверен")
                     return 0
                 else:
-                    print("❌ Сертификат не прошел проверку")
+                    print(" Сертификат не прошел проверку")
                     logger.error(f"Ошибка проверки: {verify_result.stderr}")
                     return 1
 
             except FileNotFoundError:
                 logger.error("OpenSSL не найден. Убедитесь, что OpenSSL установлен")
-                print("❌ OpenSSL не найден. Убедитесь, что OpenSSL установлен", file=sys.stderr)
+                print(" OpenSSL не найден. Убедитесь, что OpenSSL установлен", file=sys.stderr)
                 return 1
 
             except Exception as e:
                 logger.error(f"Ошибка при проверке сертификата: {e}")
-                print(f"❌ Ошибка: {e}", file=sys.stderr)
+                print(f" Ошибка: {e}", file=sys.stderr)
                 return 1
 
         elif args.command in ['key-test', 'key test']:
@@ -665,15 +707,15 @@ def main():
                     hashes.SHA256()
                 )
 
-                print("\n✅ Ключ соответствует сертификату!")
-                print(f"🔑 Ключ: {args.key}")
-                print(f"📜 Сертификат: {args.cert}")
+                print("\n Ключ соответствует сертификату!")
+                print(f" Ключ: {args.key}")
+                print(f" Сертификат: {args.cert}")
                 logger.info("Ключ успешно проверен на соответствие сертификату")
                 return 0
 
             except Exception as e:
                 logger.error(f"Ошибка при проверке ключа: {e}")
-                print(f"\n❌ Ключ НЕ соответствует сертификату: {e}", file=sys.stderr)
+                print(f"\n Ключ НЕ соответствует сертификату: {e}", file=sys.stderr)
                 return 1
 
         elif args.command in ['issue-intermediate', 'issue intermediate', 'ca issue-intermediate',
@@ -768,21 +810,21 @@ def main():
                         f.write(f"Created: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                     logger.info(f"policy.txt обновлен: {policy_path}")
 
-                print("\n✅ Промежуточный CA успешно создан!")
-                print(f"📁 Директория: {args.out_dir}")
-                print(f"🔑 Приватный ключ: {intermediate_key_path}")
-                print(f"📜 Сертификат: {cert_path}")
-                print(f"📄 CSR: {csr_path}")
+                print("\n Промежуточный CA успешно создан!")
+                print(f" Директория: {args.out_dir}")
+                print(f" Приватный ключ: {intermediate_key_path}")
+                print(f" Сертификат: {cert_path}")
+                print(f" CSR: {csr_path}")
 
                 return 0
 
             except FileExistsError as e:
                 logger.error(str(e))
-                print(f"\n❌ Ошибка: {e}", file=sys.stderr)
+                print(f"\n Ошибка: {e}", file=sys.stderr)
                 return 1
             except Exception as e:
                 logger.error(f"Ошибка при создании Intermediate CA: {e}")
-                print(f"\n❌ Ошибка: {e}", file=sys.stderr)
+                print(f"\n Ошибка: {e}", file=sys.stderr)
                 return 1
 
         elif args.command in ['chain-verify', 'chain verify']:
@@ -955,7 +997,92 @@ def main():
                 print("=" * 100)
                 print(f"Всего: {len(certs)} сертификатов")
             return 0
+        # Команда: revoke
+        elif args.command in ['revoke', 'ca revoke']:
+            from .database import CertificateDatabase
+            from .revocation import revoke_certificate
 
+            logger.info(f"Отзыв сертификата: {args.serial}, причина: {args.reason}")
+
+            db = CertificateDatabase(args.db_path)
+
+            try:
+                success = revoke_certificate(db, args.serial, args.reason, args.force)
+                if success:
+                    print(f"✅ Сертификат {args.serial} успешно отозван")
+                    logger.info(f"Сертификат отозван: {args.serial}, причина: {args.reason}")
+                else:
+                    print(f"❌ Не удалось отозвать сертификат {args.serial}")
+                    return 1
+            except ValueError as e:
+                logger.error(str(e))
+                print(f"❌ Ошибка: {e}", file=sys.stderr)
+                return 1
+            except Exception as e:
+                logger.error(f"Ошибка при отзыве: {e}")
+                print(f"❌ Ошибка: {e}", file=sys.stderr)
+                return 1
+            return 0
+
+        # Команда: gen-crl
+        elif args.command in ['gen-crl', 'ca gen-crl']:
+            from .database import CertificateDatabase
+            from .crl import generate_crl_for_ca
+            from .crypto_utils import read_passphrase_from_file
+
+            logger.info(f"Генерация CRL для CA: {args.ca}")
+
+            db = CertificateDatabase(args.db_path)
+            out_dir = Path(args.out_dir)
+
+            # Определяем пути к сертификатам и ключам
+            if args.ca == 'root':
+                cert_path = out_dir / 'certs' / 'ca.cert.pem'
+                key_path = out_dir / 'private' / 'ca.key.pem'
+                passphrase_file = out_dir / 'private' / 'ca.pass'  # может быть в другом месте
+                ca_name = 'root'
+            else:  # intermediate
+                cert_path = out_dir / 'certs' / 'intermediate.cert.pem'
+                key_path = out_dir / 'private' / 'intermediate.key.pem'
+                passphrase_file = out_dir / 'private' / 'intermediate.pass'
+                ca_name = 'intermediate'
+
+            # Проверяем существование файлов
+            if not cert_path.exists():
+                print(f"❌ Сертификат не найден: {cert_path}", file=sys.stderr)
+                return 1
+
+            if not key_path.exists():
+                print(f"❌ Ключ не найден: {key_path}", file=sys.stderr)
+                return 1
+
+            # Запрашиваем пароль (упрощённо - читаем из файла или спрашиваем)
+            try:
+                # Пробуем прочитать из файла
+                with open(passphrase_file, 'rb') as f:
+                    ca_passphrase = f.read().strip()
+            except FileNotFoundError:
+                # Если файла нет, запрашиваем ввод
+                import getpass
+                ca_passphrase = getpass.getpass(f"Введите пароль для {args.ca} CA: ").encode()
+
+            try:
+                crl_path = generate_crl_for_ca(
+                    db=db,
+                    ca_cert_path=cert_path,
+                    ca_key_path=key_path,
+                    ca_passphrase=ca_passphrase,
+                    ca_name=ca_name,
+                    out_dir=out_dir,
+                    next_update_days=args.next_update
+                )
+                print(f" CRL сгенерирован: {crl_path}")
+                logger.info(f"CRL сгенерирован для {args.ca}: {crl_path}")
+            except Exception as e:
+                logger.error(f"Ошибка генерации CRL: {e}")
+                print(f" Ошибка: {e}", file=sys.stderr)
+                return 1
+            return 0
         # Команда: show-cert
         elif args.command in ['show-cert', 'ca show-cert']:
             from .database import CertificateDatabase

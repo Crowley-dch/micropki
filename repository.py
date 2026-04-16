@@ -23,6 +23,64 @@ class RepositoryHandler(BaseHTTPRequestHandler):
         if self.logger:
             self.logger.info(f"[HTTP] {self.address_string()} - {format % args}")
 
+    def _handle_get_crl(self):
+
+        from urllib.parse import urlparse, parse_qs
+
+        parsed = urlparse(self.path)
+        query_params = parse_qs(parsed.query)
+
+        ca_param = query_params.get('ca', ['intermediate'])[0]
+
+        if ca_param == 'root':
+            crl_path = Path(self.cert_dir).parent / 'crl' / 'root.crl.pem'
+        elif ca_param == 'intermediate':
+            crl_path = Path(self.cert_dir).parent / 'crl' / 'intermediate.crl.pem'
+        else:
+            self._send_error(400, f"Invalid CA parameter: {ca_param}. Use 'root' or 'intermediate'")
+            return
+
+        if not crl_path.exists():
+            self._send_error(404, f"CRL not found for {ca_param} CA")
+            self.logger.warning(f"[HTTP] CRL not found: {crl_path}")
+            return
+
+        with open(crl_path, 'rb') as f:
+            crl_content = f.read()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pkix-crl")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", len(crl_content))
+
+        stat = crl_path.stat()
+        self.send_header("Last-Modified", self.date_time_string(stat.st_mtime))
+        self.send_header("Cache-Control", "max-age=3600")  # 1 час
+
+        self.end_headers()
+        self.wfile.write(crl_content)
+
+        self.logger.info(f"[HTTP] CRL served: {ca_param}.crl.pem")
+
+    def _handle_get_crl_file(self, ca_name: str):
+
+        crl_path = Path(self.cert_dir).parent / 'crl' / f"{ca_name}.crl.pem"
+
+        if not crl_path.exists():
+            self._send_error(404, f"CRL not found for {ca_name} CA")
+            return
+
+        with open(crl_path, 'rb') as f:
+            crl_content = f.read()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pkix-crl")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", len(crl_content))
+        self.end_headers()
+        self.wfile.write(crl_content)
+
+        self.logger.info(f"[HTTP] CRL served: {ca_name}.crl.pem")
     def _send_response(self, status_code: int, content: bytes, content_type: str = "text/plain"):
         self.send_response(status_code)
         self.send_header("Content-Type", content_type)
@@ -52,6 +110,12 @@ class RepositoryHandler(BaseHTTPRequestHandler):
         elif path == '/crl':
             self._handle_get_crl()
 
+        elif path == '/crl/root.crl':
+            self._handle_get_crl_file('root')
+
+        elif path == '/crl/intermediate.crl':
+            self._handle_get_crl_file('intermediate')
+
         elif path == '/health':
             self._send_response(200, b'{"status": "ok"}', "application/json")
 
@@ -60,7 +124,6 @@ class RepositoryHandler(BaseHTTPRequestHandler):
 
         else:
             self._send_error(404, f"Not Found: {path}")
-
     def _handle_root(self):
         content = {
             "endpoints": [
@@ -68,6 +131,10 @@ class RepositoryHandler(BaseHTTPRequestHandler):
                 "/ca/root",
                 "/ca/intermediate",
                 "/crl",
+                "/crl?ca=root",
+                "/crl?ca=intermediate",
+                "/crl/root.crl",
+                "/crl/intermediate.crl",
                 "/health"
             ]
         }
