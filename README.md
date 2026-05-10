@@ -166,6 +166,39 @@ python -m micropki.cli issue-ocsp-cert --ca-cert ./pki/certs/intermediate.cert.p
 ```bash
 python -m micropki.cli ocsp-serve --host 127.0.0.1 --port 8081 --db-path ./pki/micropki.db --responder-cert ./pki/certs/ocsp.cert.pem --responder-key ./pki/certs/ocsp.key.pem --ca-cert ./pki/certs/intermediate.cert.pem
 
+21.Генерация CSR и ключа
+```bash
+python -m micropki.cli gen-csr --subject "CN=example.com" --key-type rsa --key-size 2048 --san dns:example.com --out-key key.pem --out-csr request.csr.pem
+```
+22. Запрос сертификата у CA
+```bash
+python -m micropki.cli request-cert --csr request.csr.pem --template server --ca-url http://localhost:8080 --out-cert cert.pem
+```
+23. Проверка цепочки сертификатов
+
+```bash
+# Базовая проверка
+python -m micropki.cli validate --cert cert.pem --trusted ca.pem --untrusted intermediate.pem
+
+# Полная проверка с отзывом
+python -m micropki.cli validate --cert cert.pem --trusted ca.pem --untrusted intermediate.pem --mode full
+
+# JSON формат
+python -m micropki.cli validate --cert cert.pem --trusted ca.pem --format json
+```
+24. Проверка статуса отзыва (OCSP first, CRL fallback)
+```bash
+# Автоматический выбор
+python -m micropki.cli check-status --cert cert.pem --ca-cert ca.pem
+
+# С указанием OCSP URL
+python -m micropki.cli check-status --cert cert.pem --ca-cert ca.pem --ocsp-url http://localhost:8081
+
+# С указанием CRL
+python -m micropki.cli check-status --cert cert.pem --ca-cert ca.pem --crl crl.pem
+```
+
+
 ### Примеры API запросов
 ```bash
 # Проверка здоровья

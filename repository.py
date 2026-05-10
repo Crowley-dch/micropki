@@ -62,6 +62,92 @@ class RepositoryHandler(BaseHTTPRequestHandler):
 
         self.logger.info(f"[HTTP] CRL served: {ca_param}.crl.pem")
 
+    def do_POST(self):
+        """Обрабатывает POST запросы"""
+        parsed = urlparse(self.path)
+        path = parsed.path
+        self.logger.info(f"[HTTP] POST {path}")
+
+        if path == '/request-cert':
+            self._handle_request_cert()
+        else:
+            self._send_error(404, "Not Found")
+
+    def _handle_request_cert(self):
+        """POST /request-cert - приём CSR и выдача сертификата"""
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+        from .csr import sign_end_entity_certificate, load_csr_from_file
+        from .templates import TemplateFactory
+        from .crypto_utils import load_encrypted_private_key, parse_dn_string
+        from .certificates import cert_to_pem
+        import tempfile
+        import datetime
+
+        # Проверяем Content-Type
+        content_type = self.headers.get('Content-Type', '')
+        if content_type != 'application/x-pem-file':
+            self._send_error(400, "Expected Content-Type: application/x-pem-file")
+            return
+
+        # Получаем параметр template из query string
+        parsed = urlparse(self.path)
+        query_params = parse_qs(parsed.query)
+        template_name = query_params.get('template', ['server'])[0]
+
+        if template_name not in ['server', 'client', 'code_signing']:
+            self._send_error(400, f"Invalid template: {template_name}")
+            return
+
+        # Читаем CSR из тела запроса
+        content_length = int(self.headers.get('Content-Length', 0))
+        csr_data = self.rfile.read(content_length)
+
+        # Сохраняем временный CSR файл
+        with tempfile.NamedTemporaryFile(mode='wb', suffix='.csr.pem', delete=False) as f:
+            f.write(csr_data)
+            csr_path = Path(f.name)
+
+        try:
+            # Загружаем CSR
+            csr = load_csr_from_file(csr_path)
+
+            # Проверяем подпись CSR
+            try:
+                csr.public_key().verify(
+                    csr.signature,
+                    csr.tbs_certificate_bytes,
+                    csr.signature_hash_algorithm
+                )
+            except Exception as e:
+                self._send_error(400, f"Invalid CSR signature: {e}")
+                return
+
+            # Загружаем CA сертификат и ключ
+            ca_cert_path = Path(self.cert_dir) / 'intermediate.cert.pem'
+            ca_key_path = Path(self.cert_dir).parent / 'private' / 'intermediate.key.pem'
+
+            if not ca_cert_path.exists():
+                ca_cert_path = Path(self.cert_dir) / 'ca.cert.pem'
+                ca_key_path = Path(self.cert_dir).parent / 'private' / 'ca.key.pem'
+
+            with open(ca_cert_path, 'rb') as f:
+                ca_cert_data = f.read()
+            ca_cert = x509.load_pem_x509_certificate(ca_cert_data)
+
+            # Для ключа нужен пароль - в реальном мире должен быть передан
+            # Для демо используем заглушку
+            self._send_error(501, "CA key password handling not implemented in this demo")
+            return
+
+        except Exception as e:
+            self._send_error(500, f"Internal error: {e}")
+        finally:
+            # Удаляем временный файл
+            try:
+                csr_path.unlink()
+            except:
+                pass
     def _handle_get_crl_file(self, ca_name: str):
 
         crl_path = Path(self.cert_dir).parent / 'crl' / f"{ca_name}.crl.pem"

@@ -147,6 +147,7 @@ def validate_ocsp_key_size(value):
         raise argparse.ArgumentTypeError(f"Для OCSP ключа размер должен быть не менее 2048 бит, получено: {size}")
     return size
 
+
 def create_parser():
     parser = argparse.ArgumentParser(
         description="MicroPKI - инструмент для создания инфраструктуры открытых ключей",
@@ -157,6 +158,10 @@ def create_parser():
   micropki ca init --subject "CN=ECC Root CA,O=Demo" --key-type ecc --key-size 384 --passphrase-file pass.txt
   micropki ca verify --cert ./pki/certs/ca.cert.pem
   micropki key test --key ./pki/private/ca.key.pem --cert ./pki/certs/ca.cert.pem --passphrase-file pass.txt
+  micropki gen-csr --subject "CN=example.com" --san dns:example.com
+  micropki request-cert --csr request.csr.pem --template server --ca-url http://localhost:8080
+  micropki validate --cert cert.pem --trusted ca.cert.pem
+  micropki check-status --cert cert.pem --ca-cert ca.cert.pem
         """
     )
     subparsers = parser.add_subparsers(
@@ -165,177 +170,159 @@ def create_parser():
         required=True,
         help="Доступные команды"
     )
+
+    # Команда issue-intermediate
     issue_intermediate_parser = subparsers.add_parser(
         'issue-intermediate',
         aliases=['issue intermediate', 'ca issue-intermediate', 'ca issue intermediate'],
-        help="Создать промежуточный CA",
-        description="Генерирует CSR для Intermediate CA и подписывает его корневым CA"
+        help="Создать промежуточный CA"
     )
+    issue_intermediate_parser.add_argument('--root-cert', type=validate_cert_file, required=True)
+    issue_intermediate_parser.add_argument('--root-key', type=validate_cert_file, required=True)
+    issue_intermediate_parser.add_argument('--root-pass-file', type=validate_passphrase_file, required=True)
+    issue_intermediate_parser.add_argument('--subject', required=True)
+    issue_intermediate_parser.add_argument('--key-type', type=validate_key_type, default='rsa', choices=['rsa', 'ecc'])
+    issue_intermediate_parser.add_argument('--key-size', type=validate_key_size, required=True)
+    issue_intermediate_parser.add_argument('--passphrase-file', type=validate_passphrase_file, required=True)
+    issue_intermediate_parser.add_argument('--out-dir', type=validate_out_dir, default='./pki')
+    issue_intermediate_parser.add_argument('--validity-days', type=validate_validity_days, default=1825)
+    issue_intermediate_parser.add_argument('--pathlen', type=validate_pathlen, default=0)
+    issue_intermediate_parser.add_argument('--log-file')
+    issue_intermediate_parser.add_argument('--force', action='store_true')
 
-    issue_intermediate_parser.add_argument(
-        '--root-cert',
-        type=validate_cert_file,
-        required=True,
-        help="Путь к сертификату корневого CA (PEM)"
-    )
-
-    issue_intermediate_parser.add_argument(
-        '--root-key',
-        type=validate_cert_file,
-        required=True,
-        help="Путь к зашифрованному ключу корневого CA (PEM)"
-    )
-
-    issue_intermediate_parser.add_argument(
-        '--root-pass-file',
-        type=validate_passphrase_file,
-        required=True,
-        help="Файл с паролем для расшифровки ключа корневого CA"
-    )
-
-    issue_intermediate_parser.add_argument(
-        '--subject',
-        required=True,
-        help="Distinguished Name для Intermediate CA (например, 'CN=Intermediate CA,O=MicroPKI')"
-    )
-
-    issue_intermediate_parser.add_argument(
-        '--key-type',
-        type=validate_key_type,
-        default='rsa',
-        choices=['rsa', 'ecc'],
-        help="Тип ключа: rsa или ecc (по умолчанию: rsa)"
-    )
-
-    issue_intermediate_parser.add_argument(
-        '--key-size',
-        type=validate_key_size,
-        required=True,
-        help="Размер ключа (4096 для RSA, 384 для ECC)"
-    )
-
-    issue_intermediate_parser.add_argument(
-        '--passphrase-file',
-        type=validate_passphrase_file,
-        required=True,
-        help="Файл с паролем для шифрования ключа Intermediate CA"
-    )
-
-    issue_intermediate_parser.add_argument(
-        '--out-dir',
-        type=validate_out_dir,
-        default='./pki',
-        help="Директория для вывода (по умолчанию: ./pki)"
-    )
-
-    issue_intermediate_parser.add_argument(
-        '--validity-days',
-        type=validate_validity_days,
-        default=1825,
-        help="Срок действия в днях (по умолчанию: 1825 ≈ 5 лет)"
-    )
-
-    issue_intermediate_parser.add_argument(
-        '--pathlen',
-        type=validate_pathlen,
-        default=0,
-        help="Ограничение длины пути (pathLenConstraint, по умолчанию: 0)"
-    )
-
-    issue_intermediate_parser.add_argument(
-        '--log-file',
-        help="Путь к файлу лога"
-    )
-
-    issue_intermediate_parser.add_argument(
-        '--force',
-        action='store_true',
-        help="Принудительно перезаписывать существующие файлы"
-    )
-
-    # Команда 'issue-cert'
+    # Команда issue-cert
     issue_cert_parser = subparsers.add_parser(
         'issue-cert',
         aliases=['issue cert', 'ca issue-cert', 'ca issue cert'],
-        help="Выпустить конечный сертификат",
-        description="Выпускает сертификат для сервера, клиента или подписи кода"
+        help="Выпустить конечный сертификат"
     )
+    issue_cert_parser.add_argument('--ca-cert', type=validate_cert_file, required=True)
+    issue_cert_parser.add_argument('--ca-key', type=validate_cert_file, required=True)
+    issue_cert_parser.add_argument('--ca-pass-file', type=validate_passphrase_file, required=True)
+    issue_cert_parser.add_argument('--template', type=validate_template, required=True,
+                                   choices=['server', 'client', 'code_signing'])
+    issue_cert_parser.add_argument('--subject', required=True)
+    issue_cert_parser.add_argument('--san', action='append', dest='san_list')
+    issue_cert_parser.add_argument('--out-dir', type=validate_out_dir, default='./pki/certs')
+    issue_cert_parser.add_argument('--validity-days', type=validate_validity_days, default=365)
+    issue_cert_parser.add_argument('--csr', type=validate_cert_file)
+    issue_cert_parser.add_argument('--log-file')
+    issue_cert_parser.add_argument('--force', action='store_true')
 
-    issue_cert_parser.add_argument(
-        '--ca-cert',
-        type=validate_cert_file,
-        required=True,
-        help="Путь к сертификату CA (корневому или промежуточному)"
+    # Команда chain-verify
+    chain_verify_parser = subparsers.add_parser(
+        'chain-verify',
+        aliases=['chain verify'],
+        help="Проверить цепочку сертификатов"
     )
+    chain_verify_parser.add_argument('--leaf', type=validate_cert_file, required=True)
+    chain_verify_parser.add_argument('--intermediate', type=validate_cert_file, required=True)
+    chain_verify_parser.add_argument('--root', type=validate_cert_file, required=True)
+    chain_verify_parser.add_argument('--log-file')
 
-    issue_cert_parser.add_argument(
-        '--ca-key',
-        type=validate_cert_file,
-        required=True,
-        help="Путь к зашифрованному ключу CA"
+    # Команда ca-init
+    ca_init_parser = subparsers.add_parser(
+        'ca-init',
+        aliases=['ca init'],
+        help="Инициализировать корневой центр сертификации"
     )
+    ca_init_parser.add_argument('--subject', required=True)
+    ca_init_parser.add_argument('--key-type', type=validate_key_type, default='rsa', choices=['rsa', 'ecc'])
+    ca_init_parser.add_argument('--key-size', type=validate_key_size, required=True)
+    ca_init_parser.add_argument('--passphrase-file', type=validate_passphrase_file, required=True)
+    ca_init_parser.add_argument('--out-dir', type=validate_out_dir, default='./pki')
+    ca_init_parser.add_argument('--validity-days', type=validate_validity_days, default=3650)
+    ca_init_parser.add_argument('--log-file')
+    ca_init_parser.add_argument('--force', action='store_true')
 
-    issue_cert_parser.add_argument(
-        '--ca-pass-file',
-        type=validate_passphrase_file,
-        required=True,
-        help="Файл с паролем для расшифровки ключа CA"
+    # Команда ca-verify
+    ca_verify_parser = subparsers.add_parser(
+        'ca-verify',
+        aliases=['ca verify'],
+        help="Проверить сертификат CA"
     )
+    ca_verify_parser.add_argument('--cert', type=validate_cert_file, required=True)
+    ca_verify_parser.add_argument('--log-file')
 
-    issue_cert_parser.add_argument(
-        '--template',
-        type=validate_template,
-        required=True,
-        choices=['server', 'client', 'code_signing'],
-        help="Шаблон сертификата: server, client, code_signing"
+    # Команда key-test
+    key_test_parser = subparsers.add_parser(
+        'key-test',
+        aliases=['key test'],
+        help="Проверить соответствие ключа и сертификата"
     )
+    key_test_parser.add_argument('--key', type=validate_cert_file, required=True)
+    key_test_parser.add_argument('--cert', type=validate_cert_file, required=True)
+    key_test_parser.add_argument('--passphrase-file', type=validate_passphrase_file, required=True)
+    key_test_parser.add_argument('--log-file')
 
-    issue_cert_parser.add_argument(
-        '--subject',
-        required=True,
-        help="Distinguished Name для сертификата (например, 'CN=example.com,O=MicroPKI')"
+    # Команда db init
+    db_init_parser = subparsers.add_parser(
+        'db-init',
+        aliases=['db init'],
+        help="Инициализировать базу данных сертификатов"
     )
+    db_init_parser.add_argument('--db-path', type=validate_db_path, default='./pki/micropki.db')
+    db_init_parser.add_argument('--log-file')
 
-    issue_cert_parser.add_argument(
-        '--san',
-        action='append',
-        dest='san_list',
-        help="Subject Alternative Name (можно указывать несколько раз). "
-             "Форматы: dns:example.com, ip:192.168.1.1, email:user@example.com, uri:https://example.com"
+    # Команда list-certs
+    list_certs_parser = subparsers.add_parser(
+        'list-certs',
+        aliases=['ca list-certs'],
+        help="Список сертификатов в базе данных"
     )
+    list_certs_parser.add_argument('--status', choices=['valid', 'revoked', 'expired'])
+    list_certs_parser.add_argument('--format', choices=['table', 'json', 'csv'], default='table')
+    list_certs_parser.add_argument('--db-path', type=validate_db_path, default='./pki/micropki.db')
+    list_certs_parser.add_argument('--log-file')
 
-    issue_cert_parser.add_argument(
-        '--out-dir',
-        type=validate_out_dir,
-        default='./pki/certs',
-        help="Директория для вывода (по умолчанию: ./pki/certs)"
+    # Команда show-cert
+    show_cert_parser = subparsers.add_parser(
+        'show-cert',
+        aliases=['ca show-cert'],
+        help="Показать сертификат по серийному номеру"
     )
+    show_cert_parser.add_argument('serial', type=validate_serial)
+    show_cert_parser.add_argument('--db-path', type=validate_db_path, default='./pki/micropki.db')
+    show_cert_parser.add_argument('--log-file')
 
-    issue_cert_parser.add_argument(
-        '--validity-days',
-        type=validate_validity_days,
-        default=365,
-        help="Срок действия в днях (по умолчанию: 365)"
+    # Команда repo serve
+    repo_serve_parser = subparsers.add_parser(
+        'repo-serve',
+        aliases=['repo serve'],
+        help="Запустить HTTP репозиторий сервер"
     )
+    repo_serve_parser.add_argument('--host', default='127.0.0.1')
+    repo_serve_parser.add_argument('--port', type=int, default=8080)
+    repo_serve_parser.add_argument('--db-path', type=validate_db_path, default='./pki/micropki.db')
+    repo_serve_parser.add_argument('--cert-dir', type=validate_out_dir, default='./pki/certs')
+    repo_serve_parser.add_argument('--log-file')
 
-    issue_cert_parser.add_argument(
-        '--csr',
-        type=validate_cert_file,
-        help="Путь к внешнему CSR (опционально, если не указан - генерируется новый ключ)"
+    # Команда revoke
+    revoke_parser = subparsers.add_parser(
+        'revoke',
+        aliases=['ca revoke'],
+        help="Отозвать сертификат"
     )
+    revoke_parser.add_argument('serial', type=validate_serial)
+    revoke_parser.add_argument('--reason', default='unspecified')
+    revoke_parser.add_argument('--db-path', type=validate_db_path, default='./pki/micropki.db')
+    revoke_parser.add_argument('--force', action='store_true')
+    revoke_parser.add_argument('--log-file')
 
-    issue_cert_parser.add_argument(
-        '--log-file',
-        help="Путь к файлу лога"
+    # Команда gen-crl
+    gen_crl_parser = subparsers.add_parser(
+        'gen-crl',
+        aliases=['ca gen-crl'],
+        help="Сгенерировать CRL"
     )
+    gen_crl_parser.add_argument('--ca', required=True, choices=['root', 'intermediate'])
+    gen_crl_parser.add_argument('--next-update', type=int, default=7)
+    gen_crl_parser.add_argument('--out-file', type=str)
+    gen_crl_parser.add_argument('--db-path', type=validate_db_path, default='./pki/micropki.db')
+    gen_crl_parser.add_argument('--out-dir', type=validate_out_dir, default='./pki')
+    gen_crl_parser.add_argument('--log-file')
 
-    issue_cert_parser.add_argument(
-        '--force',
-        action='store_true',
-        help="Принудительно перезаписывать существующие файлы"
-    )
-
-    # Команда 'issue-ocsp-cert'
+    # Команда issue-ocsp-cert
     issue_ocsp_parser = subparsers.add_parser(
         'issue-ocsp-cert',
         aliases=['ca issue-ocsp-cert'],
@@ -346,13 +333,14 @@ def create_parser():
     issue_ocsp_parser.add_argument('--ca-pass-file', type=validate_passphrase_file, required=True)
     issue_ocsp_parser.add_argument('--subject', required=True)
     issue_ocsp_parser.add_argument('--key-type', type=validate_key_type, default='rsa', choices=['rsa', 'ecc'])
-    issue_ocsp_parser.add_argument('--key-size', type=validate_ocsp_key_size, default=2048)
+    issue_ocsp_parser.add_argument('--key-size', type=int, default=2048)
     issue_ocsp_parser.add_argument('--san', action='append', dest='san_list')
     issue_ocsp_parser.add_argument('--out-dir', type=validate_out_dir, default='./pki/certs')
     issue_ocsp_parser.add_argument('--validity-days', type=validate_validity_days, default=365)
     issue_ocsp_parser.add_argument('--log-file')
     issue_ocsp_parser.add_argument('--force', action='store_true')
 
+    # Команда ocsp serve
     ocsp_serve_parser = subparsers.add_parser(
         'ocsp-serve',
         aliases=['ocsp serve'],
@@ -367,253 +355,61 @@ def create_parser():
     ocsp_serve_parser.add_argument('--cache-ttl', type=int, default=60)
     ocsp_serve_parser.add_argument('--log-file')
 
-    chain_verify_parser = subparsers.add_parser(
-        'chain-verify',
-        aliases=['chain verify'],
-        help="Проверить цепочку сертификатов"
-    )
-    chain_verify_parser.add_argument('--leaf', type=validate_cert_file, required=True)
-    chain_verify_parser.add_argument('--intermediate', type=validate_cert_file, required=True)
-    chain_verify_parser.add_argument('--root', type=validate_cert_file, required=True)
-    chain_verify_parser.add_argument('--log-file')
-    # Команда ca-init
-    ca_init_parser = subparsers.add_parser(
-        'ca-init',
-        aliases=['ca init'],
-        help="Инициализировать корневой центр сертификации",
-        description="Создает самоподписанный корневой сертификат CA"
-    )
 
-    ca_init_parser.add_argument(
-        '--subject',
-        required=True,
-        help="Distinguished Name (например, '/CN=My Root CA' или 'CN=My Root CA,O=Demo')"
+    gen_csr_parser = subparsers.add_parser(
+        'gen-csr',
+        aliases=['client gen-csr'],
+        help="Generate private key and CSR"
     )
+    gen_csr_parser.add_argument('--subject', required=True)
+    gen_csr_parser.add_argument('--key-type', default='rsa', choices=['rsa', 'ecc'])
+    gen_csr_parser.add_argument('--key-size', type=int, default=2048)
+    gen_csr_parser.add_argument('--san', action='append', dest='san_list')
+    gen_csr_parser.add_argument('--out-key', default='./key.pem')
+    gen_csr_parser.add_argument('--out-csr', default='./request.csr.pem')
+    gen_csr_parser.add_argument('--log-file')
 
-    ca_init_parser.add_argument(
-        '--key-type',
-        type=validate_key_type,
-        default='rsa',
-        choices=['rsa', 'ecc'],
-        help="Тип ключа: rsa или ecc (по умолчанию: rsa)"
+    # client request-cert
+    request_cert_parser = subparsers.add_parser(
+        'request-cert',
+        aliases=['client request-cert'],
+        help="Submit CSR to CA and get certificate"
     )
+    request_cert_parser.add_argument('--csr', required=True)
+    request_cert_parser.add_argument('--template', required=True, choices=['server', 'client', 'code_signing'])
+    request_cert_parser.add_argument('--ca-url', required=True)
+    request_cert_parser.add_argument('--api-key')
+    request_cert_parser.add_argument('--out-cert', default='./cert.pem')
+    request_cert_parser.add_argument('--log-file')
 
-    ca_init_parser.add_argument(
-        '--key-size',
-        type=validate_key_size,
-        required=True,
-        help="Размер ключа в битах (4096 для RSA, 384 для ECC)"
+    # client validate
+    validate_parser = subparsers.add_parser(
+        'validate',
+        aliases=['client validate'],
+        help="Validate certificate chain"
     )
+    validate_parser.add_argument('--cert', required=True)
+    validate_parser.add_argument('--untrusted', action='append', default=[])
+    validate_parser.add_argument('--trusted', action='append', default=['./pki/certs/ca.cert.pem'])
+    validate_parser.add_argument('--crl')
+    validate_parser.add_argument('--ocsp')
+    validate_parser.add_argument('--mode', default='full', choices=['chain', 'full'])
+    validate_parser.add_argument('--format', default='text', choices=['text', 'json'])
+    validate_parser.add_argument('--log-file')
 
-    ca_init_parser.add_argument(
-        '--passphrase-file',
-        type=validate_passphrase_file,
-        required=True,
-        help="Путь к файлу с паролем для шифрования ключа"
+    # client check-status
+    check_status_parser = subparsers.add_parser(
+        'check-status',
+        aliases=['client check-status'],
+        help="Check certificate revocation status"
     )
-
-    ca_init_parser.add_argument(
-        '--out-dir',
-        type=validate_out_dir,
-        default='./pki',
-        help="Директория для вывода файлов (по умолчанию: ./pki)"
-    )
-
-    ca_init_parser.add_argument(
-        '--validity-days',
-        type=validate_validity_days,
-        default=3650,
-        help="Срок действия сертификата в днях (по умолчанию: 3650)"
-    )
-
-    ca_init_parser.add_argument(
-        '--log-file',
-        help="Путь к файлу лога (если не указан, лог пишется в stderr)"
-    )
-
-    ca_init_parser.add_argument(
-        '--force',
-        action='store_true',
-        help="Принудительно перезаписывать существующие файлы"
-    )
-
-    # Команда ca-verify
-    ca_verify_parser = subparsers.add_parser(
-        'ca-verify',
-        aliases=['ca verify'],
-        help="Проверить сертификат CA",
-        description="Проверяет самоподписанный сертификат CA"
-    )
-
-    ca_verify_parser.add_argument(
-        '--cert',
-        type=validate_cert_file,
-        required=True,
-        help="Путь к файлу сертификата для проверки"
-    )
-
-    ca_verify_parser.add_argument(
-        '--log-file',
-        help="Путь к файлу лога (если не указан, лог пишется в stderr)"
-    )
-
-    # Команда key-test
-    key_test_parser = subparsers.add_parser(
-        'key-test',
-        aliases=['key test'],
-        help="Проверить соответствие ключа и сертификата",
-        description="Проверяет, что приватный ключ соответствует сертификату"
-    )
-
-    key_test_parser.add_argument(
-        '--key',
-        type=validate_cert_file,
-        required=True,
-        help="Путь к файлу с зашифрованным приватным ключом"
-    )
-
-    key_test_parser.add_argument(
-        '--cert',
-        type=validate_cert_file,
-        required=True,
-        help="Путь к файлу сертификата"
-    )
-
-    key_test_parser.add_argument(
-        '--passphrase-file',
-        type=validate_passphrase_file,
-        required=True,
-        help="Путь к файлу с паролем для расшифровки ключа"
-    )
-
-    key_test_parser.add_argument(
-        '--log-file',
-        help="Путь к файлу лога (если не указан, лог пишется в stderr)"
-    )
-    # Команда 'db init'
-    db_init_parser = subparsers.add_parser(
-        'db-init',
-        aliases=['db init'],
-        help="Инициализировать базу данных сертификатов"
-    )
-    db_init_parser.add_argument(
-        '--db-path',
-        type=validate_db_path,
-        default='./pki/micropki.db',
-        help="Путь к SQLite базе данных (по умолчанию: ./pki/micropki.db)"
-    )
-    db_init_parser.add_argument('--log-file')
-
-    # Команда 'ca list-certs'
-    list_certs_parser = subparsers.add_parser(
-        'list-certs',
-        aliases=['ca list-certs'],
-        help="Список сертификатов в базе данных"
-    )
-    list_certs_parser.add_argument(
-        '--status',
-        choices=['valid', 'revoked', 'expired'],
-        help="Фильтр по статусу"
-    )
-    list_certs_parser.add_argument(
-        '--format',
-        choices=['table', 'json', 'csv'],
-        default='table',
-        help="Формат вывода (по умолчанию: table)"
-    )
-    list_certs_parser.add_argument(
-        '--db-path',
-        type=validate_db_path,
-        default='./pki/micropki.db',
-        help="Путь к SQLite базе данных"
-    )
-    list_certs_parser.add_argument('--log-file')
-
-    # Команда 'ca show-cert'
-    show_cert_parser = subparsers.add_parser(
-        'show-cert',
-        aliases=['ca show-cert'],
-        help="Показать сертификат по серийному номеру"
-    )
-    show_cert_parser.add_argument(
-        'serial',
-        type=validate_serial,
-        help="Серийный номер сертификата (hex)"
-    )
-    show_cert_parser.add_argument(
-        '--db-path',
-        type=validate_db_path,
-        default='./pki/micropki.db',
-        help="Путь к SQLite базе данных"
-    )
-    show_cert_parser.add_argument('--log-file')
-
-    # Команда 'repo serve'
-    repo_serve_parser = subparsers.add_parser(
-        'repo-serve',
-        aliases=['repo serve'],
-        help="Запустить HTTP репозиторий сервер"
-    )
-    repo_serve_parser.add_argument(
-        '--host',
-        default='127.0.0.1',
-        help="Адрес для привязки (по умолчанию: 127.0.0.1)"
-    )
-    repo_serve_parser.add_argument(
-        '--port',
-        type=int,
-        default=8080,
-        help="Порт для привязки (по умолчанию: 8080)"
-    )
-    repo_serve_parser.add_argument(
-        '--db-path',
-        type=validate_db_path,
-        default='./pki/micropki.db',
-        help="Путь к SQLite базе данных"
-    )
-    repo_serve_parser.add_argument(
-        '--cert-dir',
-        type=validate_out_dir,
-        default='./pki/certs',
-        help="Директория с сертификатами (по умолчанию: ./pki/certs)"
-    )
-    # Команда 'revoke'
-    revoke_parser = subparsers.add_parser(
-        'revoke',
-        aliases=['ca revoke'],
-        help="Отозвать сертификат",
-        description="Отзывает выпущенный сертификат по серийному номеру"
-    )
-    revoke_parser.add_argument('serial', type=validate_serial, help="Серийный номер сертификата (hex)")
-    revoke_parser.add_argument('--reason', type=validate_reason, default='unspecified',
-                               help="Причина отзыва (по умолчанию: unspecified)")
-    revoke_parser.add_argument('--db-path', type=validate_db_path, default='./pki/micropki.db',
-                               help="Путь к SQLite базе данных")
-    revoke_parser.add_argument('--force', action='store_true',
-                               help="Принудительно без подтверждения")
-    revoke_parser.add_argument('--log-file')
-
-    # Команда 'gen-crl'
-    gen_crl_parser = subparsers.add_parser(
-        'gen-crl',
-        aliases=['ca gen-crl'],
-        help="Сгенерировать CRL",
-        description="Генерирует CRL (Certificate Revocation List) для указанного CA"
-    )
-    gen_crl_parser.add_argument('--ca', required=True, choices=['root', 'intermediate'],
-                                help="Тип CA: root или intermediate")
-    gen_crl_parser.add_argument('--next-update', type=int, default=7,
-                                help="Дней до следующего обновления CRL (по умолчанию: 7)")
-    gen_crl_parser.add_argument('--out-file', type=str,
-                                help="Путь для сохранения CRL (опционально)")
-    gen_crl_parser.add_argument('--db-path', type=validate_db_path, default='./pki/micropki.db')
-    gen_crl_parser.add_argument('--out-dir', type=validate_out_dir, default='./pki')
-    gen_crl_parser.add_argument('--log-file')
-    repo_serve_parser.add_argument('--log-file')
+    check_status_parser.add_argument('--cert', required=True)
+    check_status_parser.add_argument('--ca-cert', required=True)
+    check_status_parser.add_argument('--crl')
+    check_status_parser.add_argument('--ocsp-url')
+    check_status_parser.add_argument('--log-file')
 
     return parser
-
-
 def main():
     import sys
     parser = create_parser()
@@ -874,6 +670,22 @@ def main():
             from .chain import validate_full_chain
             is_valid = validate_full_chain(args.leaf, args.intermediate, args.root)
             return 0 if is_valid else 1
+        # Client commands
+        elif args.command in ['gen-csr', 'client gen-csr']:
+            from .client import handle_gen_csr
+            return handle_gen_csr(args, logger)
+
+        elif args.command in ['request-cert', 'client request-cert']:
+            from .client import handle_request_cert
+            return handle_request_cert(args, logger)
+
+        elif args.command in ['validate', 'client validate']:
+            from .client import handle_validate
+            return handle_validate(args, logger)
+
+        elif args.command in ['check-status', 'client check-status']:
+            from .client import handle_check_status
+            return handle_check_status(args, logger)
 
         elif args.command in ['issue-cert', 'issue cert', 'ca issue-cert', 'ca issue cert']:
             from .crypto_utils import load_encrypted_private_key, generate_key, parse_dn_string
