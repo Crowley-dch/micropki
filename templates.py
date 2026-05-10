@@ -129,6 +129,39 @@ class CodeSigningTemplate(CertificateTemplate):
         return []
 
 
+class OCSPTemplate(CertificateTemplate):
+    """Шаблон для сертификата OCSP подписи"""
+
+    def __init__(self):
+        super().__init__(
+            name="ocsp",
+            description="OCSP responder signing certificate"
+        )
+
+    def get_key_usage(self) -> x509.KeyUsage:
+        return x509.KeyUsage(
+            digital_signature=True,
+            content_commitment=False,
+            key_encipherment=False,
+            data_encipherment=False,
+            key_agreement=False,
+            key_cert_sign=False,
+            crl_sign=False,
+            encipher_only=False,
+            decipher_only=False
+        )
+
+    def get_extended_key_usage(self) -> x509.ExtendedKeyUsage:
+        from cryptography.x509.oid import ExtendedKeyUsageOID
+        return x509.ExtendedKeyUsage([
+            ExtendedKeyUsageOID.OCSP_SIGNING
+        ])
+
+    def requires_san(self) -> bool:
+        return False
+
+    def allowed_san_types(self) -> List[str]:
+        return ['dns', 'ip', 'uri']
 # Фабрика шаблонов
 class TemplateFactory:
 
@@ -136,6 +169,7 @@ class TemplateFactory:
         'server': ServerTemplate,
         'client': ClientTemplate,
         'code_signing': CodeSigningTemplate,
+        'ocsp': OCSPTemplate,
     }
 
     @classmethod

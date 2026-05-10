@@ -158,6 +158,13 @@ python -m micropki.cli gen-crl --ca root --next-update 7
 python -m micropki.cli gen-crl --ca intermediate --next-update 14
 ```
 Генерирует CRL (Certificate Revocation List) для указанного CA.
+19.  Выпуск OCSP сертификата
+```bash
+python -m micropki.cli issue-ocsp-cert --ca-cert ./pki/certs/intermediate.cert.pem --ca-key ./pki/private/intermediate.key.pem --ca-pass-file passphrase.txt --subject "CN=OCSP Responder" --key-type rsa --key-size 2048 --out-dir ./pki/certs
+```
+20. Запуск OCSP responder
+```bash
+python -m micropki.cli ocsp-serve --host 127.0.0.1 --port 8081 --db-path ./pki/micropki.db --responder-cert ./pki/certs/ocsp.cert.pem --responder-key ./pki/certs/ocsp.key.pem --ca-cert ./pki/certs/intermediate.cert.pem
 
 ### Примеры API запросов
 ```bash
@@ -290,6 +297,24 @@ crl.py
 - Поддержка AKI и CRL Number расширений
 - Сохранение CRL в PEM формате
 ```
+```text 
+ocsp.py 
+OCSP responder core:
+- OCSPResponder - класс для обработки OCSP запросов
+- parse_request() - парсинг OCSP запроса (RFC 6960)
+- build_response() - построение подписанного ответа
+- Поддержка nonce (replay protection)
+- Статусы: good, revoked, unknown
+```
+```text 
+ocsp_responder.py 
+HTTP OCSP responder сервер:
+- OCSPHandler - обработчик HTTP запросов
+- Эндпоинты: POST /ocsp, GET /health
+- Интеграция с базой данных
+- Логирование запросов
+```
+
 ## Тестирование
 
 Запуск всех тестов
@@ -301,4 +326,5 @@ pytest tests/ -v
 ```bash
 pytest tests/test_crypto_utils.py -v
 pytest tests/test_certificates.py::TestCertificates::test_create_rsa_certificate -v
+pytest tests/test_ocsp.py 
 ```

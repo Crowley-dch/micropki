@@ -137,6 +137,16 @@ def read_passphrase(passphrase_file: Path) -> bytes:
     return passphrase
 
 
+def validate_ocsp_key_size(value):
+    try:
+        size = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"Размер ключа должен быть числом, получено: {value}")
+
+    if size < 2048:
+        raise argparse.ArgumentTypeError(f"Для OCSP ключа размер должен быть не менее 2048 бит, получено: {size}")
+    return size
+
 def create_parser():
     parser = argparse.ArgumentParser(
         description="MicroPKI - инструмент для создания инфраструктуры открытых ключей",
@@ -324,6 +334,39 @@ def create_parser():
         action='store_true',
         help="Принудительно перезаписывать существующие файлы"
     )
+
+    # Команда 'issue-ocsp-cert'
+    issue_ocsp_parser = subparsers.add_parser(
+        'issue-ocsp-cert',
+        aliases=['ca issue-ocsp-cert'],
+        help="Выпустить сертификат для OCSP подписи"
+    )
+    issue_ocsp_parser.add_argument('--ca-cert', type=validate_cert_file, required=True)
+    issue_ocsp_parser.add_argument('--ca-key', type=validate_cert_file, required=True)
+    issue_ocsp_parser.add_argument('--ca-pass-file', type=validate_passphrase_file, required=True)
+    issue_ocsp_parser.add_argument('--subject', required=True)
+    issue_ocsp_parser.add_argument('--key-type', type=validate_key_type, default='rsa', choices=['rsa', 'ecc'])
+    issue_ocsp_parser.add_argument('--key-size', type=validate_ocsp_key_size, default=2048)
+    issue_ocsp_parser.add_argument('--san', action='append', dest='san_list')
+    issue_ocsp_parser.add_argument('--out-dir', type=validate_out_dir, default='./pki/certs')
+    issue_ocsp_parser.add_argument('--validity-days', type=validate_validity_days, default=365)
+    issue_ocsp_parser.add_argument('--log-file')
+    issue_ocsp_parser.add_argument('--force', action='store_true')
+
+    ocsp_serve_parser = subparsers.add_parser(
+        'ocsp-serve',
+        aliases=['ocsp serve'],
+        help="Запустить OCSP responder сервер"
+    )
+    ocsp_serve_parser.add_argument('--host', default='127.0.0.1')
+    ocsp_serve_parser.add_argument('--port', type=int, default=8081)
+    ocsp_serve_parser.add_argument('--db-path', type=validate_db_path, default='./pki/micropki.db')
+    ocsp_serve_parser.add_argument('--responder-cert', type=validate_cert_file, required=True)
+    ocsp_serve_parser.add_argument('--responder-key', type=validate_cert_file, required=True)
+    ocsp_serve_parser.add_argument('--ca-cert', type=validate_cert_file, required=True)
+    ocsp_serve_parser.add_argument('--cache-ttl', type=int, default=60)
+    ocsp_serve_parser.add_argument('--log-file')
+
     chain_verify_parser = subparsers.add_parser(
         'chain-verify',
         aliases=['chain verify'],
@@ -953,7 +996,76 @@ def main():
                 print(f"\nОшибка: {e}", file=sys.stderr)
                 return 1
 
+        # Команда: issue-ocsp-cert
+        elif args.command in ['issue-ocsp-cert', 'ca issue-ocsp-cert']:
+            from .crypto_utils import load_encrypted_private_key
+            from .ocsp import create_ocsp_signer_certificate, save_unencrypted_key
+            from .certificates import cert_to_pem
+            from cryptography import x509
 
+            logger.info(f"Выпуск OCSP сертификата")
+
+            # Загружаем CA
+            with open(args.ca_cert, 'rb') as f:
+                ca_cert_data = f.read()
+            ca_cert = x509.load_pem_x509_certificate(ca_cert_data)
+
+            ca_passphrase = read_passphrase(args.ca_pass_file)
+            ca_key = load_encrypted_private_key(args.ca_key, ca_passphrase)
+
+            # Генерируем сертификат
+            ocsp_key, ocsp_cert = create_ocsp_signer_certificate(
+                ca_cert=ca_cert,
+                ca_private_key=ca_key,
+                subject_dn=args.subject,
+                key_type=args.key_type,
+                key_size=args.key_size,
+                validity_days=args.validity_days,
+                san_list=args.san_list if hasattr(args, 'san_list') else None
+            )
+
+            # Сохраняем сертификат
+            certs_dir = Path(args.out_dir)
+            certs_dir.mkdir(parents=True, exist_ok=True)
+
+            cert_path = certs_dir / f"ocsp.cert.pem"
+            if cert_path.exists() and not args.force:
+                raise FileExistsError(f"Файл уже существует: {cert_path}. Используйте --force")
+            cert_path.write_bytes(cert_to_pem(ocsp_cert))
+
+            # Сохраняем ключ (незашифрованный)
+            key_path = certs_dir / f"ocsp.key.pem"
+            if key_path.exists() and not args.force:
+                raise FileExistsError(f"Файл уже существует: {key_path}. Используйте --force")
+            save_unencrypted_key(ocsp_key, key_path)
+
+            print(f"\n OCSP сертификат создан!")
+            print(f" Сертификат: {cert_path}")
+            print(f" Приватный ключ (незашифрованный): {key_path}")
+            print(f"️ ВНИМАНИЕ: Ключ сохранен НЕЗАШИФРОВАННЫМ!")
+
+            return 0
+
+        # Команда: ocsp serve
+        elif args.command in ['ocsp-serve', 'ocsp serve']:
+            from .ocsp_responder import start_ocsp_server
+
+            logger.info(f"Запуск OCSP responder: {args.host}:{args.port}")
+            print(f" Запуск OCSP responder на http://{args.host}:{args.port}")
+            print("   Эндпоинт: POST /ocsp")
+            print("   Нажмите Ctrl+C для остановки")
+
+            start_ocsp_server(
+                host=args.host,
+                port=args.port,
+                db_path=args.db_path,
+                responder_cert_path=args.responder_cert,
+                responder_key_path=args.responder_key,
+                ca_cert_path=args.ca_cert,
+                cache_ttl=args.cache_ttl,
+                log_file=args.log_file
+            )
+            return 0
         elif args.command in ['db-init', 'db init']:
             from .database import CertificateDatabase
             logger.info(f"Инициализация базы данных: {args.db_path}")
@@ -1009,18 +1121,18 @@ def main():
             try:
                 success = revoke_certificate(db, args.serial, args.reason, args.force)
                 if success:
-                    print(f"✅ Сертификат {args.serial} успешно отозван")
+                    print(f" Сертификат {args.serial} успешно отозван")
                     logger.info(f"Сертификат отозван: {args.serial}, причина: {args.reason}")
                 else:
-                    print(f"❌ Не удалось отозвать сертификат {args.serial}")
+                    print(f" Не удалось отозвать сертификат {args.serial}")
                     return 1
             except ValueError as e:
                 logger.error(str(e))
-                print(f"❌ Ошибка: {e}", file=sys.stderr)
+                print(f" Ошибка: {e}", file=sys.stderr)
                 return 1
             except Exception as e:
                 logger.error(f"Ошибка при отзыве: {e}")
-                print(f"❌ Ошибка: {e}", file=sys.stderr)
+                print(f" Ошибка: {e}", file=sys.stderr)
                 return 1
             return 0
 
@@ -1049,14 +1161,13 @@ def main():
 
             # Проверяем существование файлов
             if not cert_path.exists():
-                print(f"❌ Сертификат не найден: {cert_path}", file=sys.stderr)
+                print(f" Сертификат не найден: {cert_path}", file=sys.stderr)
                 return 1
 
             if not key_path.exists():
-                print(f"❌ Ключ не найден: {key_path}", file=sys.stderr)
+                print(f" Ключ не найден: {key_path}", file=sys.stderr)
                 return 1
 
-            # Запрашиваем пароль (упрощённо - читаем из файла или спрашиваем)
             try:
                 # Пробуем прочитать из файла
                 with open(passphrase_file, 'rb') as f:
@@ -1083,7 +1194,6 @@ def main():
                 print(f" Ошибка: {e}", file=sys.stderr)
                 return 1
             return 0
-        # Команда: show-cert
         elif args.command in ['show-cert', 'ca show-cert']:
             from .database import CertificateDatabase
             logger.info(f"Поиск сертификата по серийному номеру: {args.serial}")
